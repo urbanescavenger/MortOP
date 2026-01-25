@@ -147,6 +147,11 @@ jobs:
       if: (!cancelled())
       run: df -hT
 
+    - name: Check Compile
+      if: steps.compile.outputs.status == 'false'
+      run:  echo "Compile fail" >> $GITHUB_OUTPUT
+            exit 1
+
     - name: Upload bin directory
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
