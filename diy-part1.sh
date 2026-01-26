@@ -24,3 +24,4 @@ sed -i '2i src-git small https://github.com/kenzok8/small' feeds.conf.default
 rm -rf feeds/packages/net/{alist,adguardhome,mosdns,xray*,v2ray*,v2ray*,sing*,smartdns}
 rm -rf feeds/packages/utils/v2dat
 ./scripts/feeds install -a 
+git clone https://github.com/sirpdboy/luci-app-lucky.git package/lucky
