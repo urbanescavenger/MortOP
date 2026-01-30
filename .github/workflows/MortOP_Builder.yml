@@ -149,7 +149,7 @@ jobs:
       
     - name: Check Compile
       if: steps.compile.outputs.status != 'success'
-      run:
+      run: |
             echo "Compile fail" >> $GITHUB_OUTPUT
             exit 1
 
