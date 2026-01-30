@@ -149,7 +149,8 @@ jobs:
       
     - name: Check Compile
       if: steps.compile.outputs.status != 'success'
-      run:  echo "Compile fail" >> $GITHUB_OUTPUT
+      run:
+            echo "Compile fail" >> $GITHUB_OUTPUT
             exit 1
 
     - name: Upload bin directory
