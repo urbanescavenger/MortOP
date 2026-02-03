@@ -148,8 +148,9 @@ jobs:
       run: df -hT
       
     - name: Check Compile
-      if: steps.compile.outputs.status == 'false'
-      run:  echo "Compile fail" >> $GITHUB_OUTPUT
+      if: steps.compile.outputs.status != 'success'
+      run: |
+            echo "Compile fail" >> $GITHUB_OUTPUT
             exit 1
 
     - name: Upload bin directory
@@ -204,7 +205,7 @@ jobs:
       uses: dev-drprasad/delete-older-releases@master
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       with:
-        keep_latest: 3
+        keep_latest: 10
         delete_tags: true
       env:
         GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
