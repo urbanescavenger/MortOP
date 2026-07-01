@@ -1,0 +1,51 @@
+#!/bin/sh /etc/rc.common
+# Shutdown cleanup to fix reboot hang.
+# Runs last (STOP=99 -> K99) before the final rootfs remount-ro, and forcibly
+# tears down Docker overlays and NFS kernel threads so the rootfs can be
+# remounted read-only and the kernel reboot() can proceed.
+# Idempotent and safe: no-op on pieces already stopped.
+
+START=99
+STOP=99
+
+log() { logger -t reboot-fix "$*"; }
+
+boot() { :; }
+start() { :; }
+reload() { :; }
+
+stop() {
+	# --- Docker: stop containers, kill daemons, unmount overlays ---
+	if [ -x /etc/init.d/dockerd ]; then
+		/etc/init.d/dockerd stop >/dev/null 2>&1
+	fi
+	if command -v docker >/dev/null 2>&1; then
+		# give running containers a moment to exit, then let dockerd die
+		docker ps -q 2>/dev/null | xargs -r docker stop -t 2 >/dev/null 2>&1
+	fi
+	killall -9 dockerd containerd containerd-shim 2>/dev/null
+	# unmount every overlay-typed mount (docker container rootfs / overlay2)
+	mount | awk '$5=="overlay"{print $3}' | sort -r | while read m; do
+		umount -f "$m" 2>/dev/null
+	done
+	# if /var/lib/docker is itself a mount, drop it too
+	mount | awk '$3=="/var/lib/docker"{print $3}' | while read m; do
+		umount -f "$m" 2>/dev/null
+	done
+
+	# --- NFS kernel server: unexport, stop, kill, unload kernel modules ---
+	exportfs -ua 2>/dev/null
+	if [ -x /etc/init.d/nfsd ]; then
+		/etc/init.d/nfsd stop >/dev/null 2>&1
+	fi
+	killall -9 rpc.nfsd rpc.mountd rpcbind 2>/dev/null
+	# unload kernel modules so nfsd/lockd kernel threads actually exit
+	# (these kernel threads block the final reboot if they linger)
+	for m in nfsd nfs_acl lockd grace sunrpc; do
+		rmmod "$m" 2>/dev/null
+	done
+
+	sync
+	log "shutdown cleanup done"
+	return 0
+}
