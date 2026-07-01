@@ -94,17 +94,16 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-          set -e
-          # 1) 先删除大目录释放空间(无需 apt)
-          sudo -E rm -rf /usr/share/dotnet /etc/mysql /etc/php /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          # 2) purge 大软件包,进一步腾空间(无需先 update)
-          sudo -E apt-mark hold grub-efi-amd64-signed
+          # 1) 删除大目录 + 清掉第三方 apt 源(旧脚本靠这步保证 update 干净)
+          sudo -E rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/apt/sources.list.d /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          # 2) hold 引导包 + purge 大软件包腾空间(均容忍良性非零)
+          sudo -E apt-mark hold grub-efi-amd64-signed || true
           sudo -E apt-get -qq purge -y azure-cli* docker* ghc* zulu* llvm* firefox google* dotnet* powershell* openjdk* mysql* php* mongodb* snap* || true
           # 3) 清空 apt 自身缓存,保证 update 前根分区最大化
-          sudo -E apt-get -qq clean
+          sudo -E apt-get -qq clean || true
           sudo -E rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
-          # 4) 现在再 update + 安装编译依赖(不 full-upgrade,不装 recommends)
-          sudo -E apt-get -qq update
+          # 4) update + 安装编译依赖(不 full-upgrade,不装 recommends);update 失败重试一次
+          sudo -E apt-get -qq update || sudo -E apt-get -qq update
           sudo -E apt-get -qq install --no-install-recommends -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext genisoimage git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
           # 5) 收尾清理
           sudo -E systemctl daemon-reload
