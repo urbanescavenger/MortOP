@@ -1,0 +1,4 @@
+*.sh text eol=lf
+files/** text eol=lf
+*.yml text eol=lf
+.config text eol=lf
