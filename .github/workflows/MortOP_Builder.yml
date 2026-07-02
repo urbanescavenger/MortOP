@@ -89,19 +89,33 @@ jobs:
         df -hT
         echo "=============================================================================="
 
-    # maximize-build-space 的 swap-size-mb 在新版 runner 上会静默失效(分区布局已变,
-    # 该 action 已停止维护),导致实际无 swap,lede 编译链接阶段直接 OOM 失联。
-    # 这里显式创建并激活 swapfile,保证编译期有足够虚拟内存。
-    - name: Setup explicit swap (guarantee swap is active)
+    # 实测:maximize-build-space 的 8G swap(/dev/dm-0)在 runner 上是正常激活的。
+    # 上轮 OOM 的真因是 make -j4 并行编译把 16G RAM + 8G swap(共 24G)撑爆。
+    # 这里额外加一个 swapfile 给 j3 留余量,但带容量守卫:仅当目标分区空闲 >40G
+    # 才创建,避免和 30G+ 的 build 抢磁盘导致磁盘满;任何失败均非致命,不阻断编译。
+    - name: Setup extra swap (guarded, non-fatal)
       run: |
-        echo "Swap before:"
+        echo "=== Swap/disk before ==="
         swapon --show || true
         free -h
-        sudo fallocate -l 12G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=12288
-        sudo chmod 600 /swapfile
-        sudo mkswap /swapfile
-        sudo swapon /swapfile
-        echo "Swap after:"
+        df -hT
+        # 找空闲最大的实体分区(排除 tmpfs/loop/overlay 等伪文件系统)
+        BEST=$(df -BG --output=avail,target 2>/dev/null \
+               | grep -vE 'tmpfs|devtmpfs|loop|uvm|overlay|Filesystem|Mounted' \
+               | sort -nr | head -1 | awk '{print $2}')
+        AVAIL=$(df -BG --output=avail "$BEST" 2>/dev/null | tail -1 | tr -dc '0-9')
+        echo "Best mount: $BEST (~${AVAIL}G free)"
+        if [ "${AVAIL:-0}" -gt 40 ]; then
+          SWAP="$BEST/swapfile-extra"
+          echo "Creating 8G swap at $SWAP"
+          sudo fallocate -l 8G "$SWAP" 2>/dev/null || sudo dd if=/dev/zero of="$SWAP" bs=1M count=8192
+          sudo chmod 600 "$SWAP"
+          sudo mkswap "$SWAP" >/dev/null 2>&1
+          sudo swapon "$SWAP" 2>/dev/null || echo "WARN: swapon failed, continuing with existing 8G swap"
+        else
+          echo "Free space <40G on best mount, skipping extra swap to avoid disk starvation"
+        fi
+        echo "=== Swap after ==="
         swapon --show
         free -h
 
@@ -173,7 +187,9 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        # j4 实测会 OOM(16G RAM + 8G swap 共 24G 撑爆);j3 落在 24G 内且 <6h 上限。
+        # 注意:OOM 会杀掉整个 runner,|| make -j1 兜底只对普通编译错误有效,不救 OOM。
+        make -j3 || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
