@@ -89,38 +89,34 @@ jobs:
         df -hT
         echo "=============================================================================="
 
-    # 实测:maximize-build-space 的 8G swap(/dev/dm-0)在 runner 上是正常激活的。
-    # 上轮 OOM 的真因是 make -j4 并行编译把 16G RAM + 8G swap(共 24G)撑爆。
-    # 这里额外加一个 swapfile 给 j3 留余量,但带容量守卫:仅当目标分区空闲 >40G
-    # 才创建,避免和 30G+ 的 build 抢磁盘导致磁盘满;任何失败均非致命,不阻断编译。
-    - name: Setup extra swap (guarded, non-fatal)
+    - name: Checkout
+      uses: actions/checkout@main
+
+    # 放在 Checkout 之后:workspace 已清空且不会再被清,在此建 swapfile 不冲突
+    # actions/checkout 的清空动作。maximize-build-space 把大分区挂载在 workspace 上,
+    # 所以 swapfile 只能写在这里(根分区只剩 ~3G)。带容量守卫:仅当 workspace 空闲
+    # >40G 才建,避免和 30G+ build 抢磁盘;任何失败均非致命,退回已有 8G swap + j3。
+    - name: Setup extra swap (after checkout, guarded, non-fatal)
       run: |
         echo "=== Swap/disk before ==="
         swapon --show || true
         free -h
-        df -hT
-        # 找空闲最大的实体分区(排除 tmpfs/loop/overlay 等伪文件系统)
-        BEST=$(df -BG --output=avail,target 2>/dev/null \
-               | grep -vE 'tmpfs|devtmpfs|loop|uvm|overlay|Filesystem|Mounted' \
-               | sort -nr | head -1 | awk '{print $2}')
-        AVAIL=$(df -BG --output=avail "$BEST" 2>/dev/null | tail -1 | tr -dc '0-9')
-        echo "Best mount: $BEST (~${AVAIL}G free)"
+        df -hT "$GITHUB_WORKSPACE"
+        AVAIL=$(df -BG --output=avail "$GITHUB_WORKSPACE" 2>/dev/null | tail -1 | tr -dc '0-9')
+        echo "Workspace free: ~${AVAIL}G"
         if [ "${AVAIL:-0}" -gt 40 ]; then
-          SWAP="$BEST/swapfile-extra"
+          SWAP="$GITHUB_WORKSPACE/.swapfile"
           echo "Creating 8G swap at $SWAP"
           sudo fallocate -l 8G "$SWAP" 2>/dev/null || sudo dd if=/dev/zero of="$SWAP" bs=1M count=8192
           sudo chmod 600 "$SWAP"
           sudo mkswap "$SWAP" >/dev/null 2>&1
           sudo swapon "$SWAP" 2>/dev/null || echo "WARN: swapon failed, continuing with existing 8G swap"
         else
-          echo "Free space <40G on best mount, skipping extra swap to avoid disk starvation"
+          echo "Workspace free <40G, skipping extra swap to avoid disk starvation"
         fi
         echo "=== Swap after ==="
         swapon --show
         free -h
-
-    - name: Checkout
-      uses: actions/checkout@main
 
     - name: Initialization environment
       env:
