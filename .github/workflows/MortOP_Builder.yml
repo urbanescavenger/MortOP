@@ -88,6 +88,23 @@ jobs:
         echo "=============================================================================="
         df -hT
         echo "=============================================================================="
+
+    # maximize-build-space 的 swap-size-mb 在新版 runner 上会静默失效(分区布局已变,
+    # 该 action 已停止维护),导致实际无 swap,lede 编译链接阶段直接 OOM 失联。
+    # 这里显式创建并激活 swapfile,保证编译期有足够虚拟内存。
+    - name: Setup explicit swap (guarantee swap is active)
+      run: |
+        echo "Swap before:"
+        swapon --show || true
+        free -h
+        sudo fallocate -l 12G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=12288
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        echo "Swap after:"
+        swapon --show
+        free -h
+
     - name: Checkout
       uses: actions/checkout@main
 
