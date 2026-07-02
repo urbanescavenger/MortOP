@@ -74,7 +74,7 @@ jobs:
     - name: Freeing up disk space
       uses: easimon/maximize-build-space@master
       with: 
-        root-reserve-mb: 4096
+        root-reserve-mb: 8192
         swap-size-mb: 8192
         remove-dotnet: 'true'
         remove-android: 'true'
@@ -114,6 +114,11 @@ jobs:
         else
           echo "Workspace free <40G, skipping extra swap to avoid disk starvation"
         fi
+        # 把临时目录指到 build 挂载点(114G),避免编译期 /tmp 写到根分区(仅剩百 MB)触发 ENOSPC
+        mkdir -p "$GITHUB_WORKSPACE/.tmp"
+        echo "TMPDIR=$GITHUB_WORKSPACE/.tmp" >> $GITHUB_ENV
+        echo "TMP=$GITHUB_WORKSPACE/.tmp" >> $GITHUB_ENV
+        echo "TEMP=$GITHUB_WORKSPACE/.tmp" >> $GITHUB_ENV
         echo "=== Swap after ==="
         swapon --show
         free -h
@@ -182,6 +187,8 @@ jobs:
       id: compile
       run: |
         cd openwrt
+        echo "=== Disk state at compile start ==="
+        df -hT / "$GITHUB_WORKSPACE"
         echo -e "$(nproc) thread compile"
         # j4 实测会 OOM(16G RAM + 8G swap 共 24G 撑爆);j3 落在 24G 内且 <6h 上限。
         # 注意:OOM 会杀掉整个 runner,|| make -j1 兜底只对普通编译错误有效,不救 OOM。
