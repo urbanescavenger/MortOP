@@ -21,6 +21,7 @@ on:
       - 'diy-part1.sh'
       - 'diy-part2.sh'
       - '.github/workflows/MortOP_Builder.yml'
+      - 'files/**'
   repository_dispatch:
   workflow_dispatch:
 
@@ -74,7 +75,7 @@ jobs:
       uses: easimon/maximize-build-space@master
       with: 
         root-reserve-mb: 4096
-        swap-size-mb: 1024
+        swap-size-mb: 8192
         remove-dotnet: 'true'
         remove-android: 'true'
         remove-haskell: 'true'
