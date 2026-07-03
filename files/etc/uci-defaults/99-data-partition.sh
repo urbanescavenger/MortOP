@@ -30,8 +30,26 @@ esac
 
 command -v parted >/dev/null 2>&1 || { log "parted not installed; exit"; exit 0; }
 
-# 2) Idempotency: data partition already exists -> done.
-[ -b "$data_dev" ] && { log "$data_dev already exists; skip"; exit 0; }
+# 2) Wipe-on-reflash: if the data partition already exists, delete it so the
+#    carve+format below produces a clean slate (docker data is wiped on each
+#    firmware update, not persisted). Only delete our own data partition
+#    (LABEL=data) or a bare one; never touch a partition holding some other
+#    filesystem (e.g. boot/efi). uci-defaults run before init.d, so the data
+#    partition is unmounted here. Brand-new disk (no data partition yet)
+#    skips this block and goes straight to carve.
+if [ -b "$data_dev" ]; then
+  fs_info=$(blkid "$data_dev" 2>/dev/null)
+  if echo "$fs_info" | grep -q 'LABEL="data"' || ! echo "$fs_info" | grep -q 'TYPE='; then
+    log "$data_dev exists; deleting for clean rebuild"
+    umount "$data_dev" 2>/dev/null
+    parted -s "$disk" rm "$((partno+1))" >/dev/null 2>&1 || log "parted rm returned nonzero"
+    partprobe "$disk" 2>/dev/null
+    sleep 1
+  else
+    log "$data_dev has unexpected content ($fs_info); not touching; exit"
+    exit 0
+  fi
+fi
 
 # 3) Fix GPT backup header. dd'ing a small image onto a larger disk leaves the
 #    backup GPT mid-disk; fdisk 'w' auto-corrects PMBR + backup GPT placement.
