@@ -1,0 +1,18 @@
+#!/bin/sh /etc/rc.common
+# Mount the first-boot data partition (LABEL=data) onto /opt/docker so dockerd
+# stores images/containers on the carved-out volume, not the small rootfs.
+# Runs before dockerd (START=15 < dockerd's start order). Idempotent; safe if
+# the partition is absent (mount silently fails, dockerd falls back to rootfs).
+START=15
+
+mount_now() {
+	mkdir -p /opt/docker
+	grep -q ' /opt/docker ' /proc/mounts && return 0
+	mount -L data /opt/docker 2>/dev/null && return 0
+	dev=$(blkid -L data 2>/dev/null)		# fallback if mount -L unsupported
+	[ -b "$dev" ] && mount "$dev" /opt/docker 2>/dev/null
+}
+
+boot()  { mount_now; }
+start() { mount_now; }
+stop()  { grep -q ' /opt/docker ' /proc/mounts && umount /opt/docker 2>/dev/null; }

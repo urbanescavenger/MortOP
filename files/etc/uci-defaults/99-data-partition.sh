@@ -60,7 +60,19 @@ if command -v mkfs.ext4 >/dev/null 2>&1; then
   mkfs.ext4 -F -L data "$data_dev" >/dev/null 2>&1 || { log "mkfs.ext4 failed; exit"; exit 0; }
 else
   log "mkfs.ext4 not installed; partition created but unformatted"
+  exit 0
 fi
+
+# 6) Mount the new volume at /opt/docker now, so dockerd (starting later this
+#    same first boot) puts its data on the big partition instead of the rootfs.
+#    The docker-data init (enabled by 98-enable-docker-data.sh) re-mounts it on
+#    every subsequent boot. Skip if already mounted.
+mkdir -p /opt/docker
+if ! grep -q ' /opt/docker ' /proc/mounts; then
+  mount -L data /opt/docker 2>/dev/null || mount "$data_dev" /opt/docker 2>/dev/null \
+    || log "mount /opt/docker failed (partition exists, will be mounted by docker-data init)"
+fi
+grep -q ' /opt/docker ' /proc/mounts && log "data partition mounted at /opt/docker"
 
 log "done: data partition $data_dev created+formatted (root $root_dev untouched)"
 exit 0

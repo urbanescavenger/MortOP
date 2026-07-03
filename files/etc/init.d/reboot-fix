@@ -32,6 +32,11 @@ stop() {
 	mount | awk '$3=="/var/lib/docker"{print $3}' | while read m; do
 		umount -f "$m" 2>/dev/null
 	done
+	# if /opt/docker (dockerd data-root on the carved data partition) is a
+	# mount, drop it too so it doesn't block the final rootfs remount-ro
+	mount | awk '$3=="/opt/docker"{print $3}' | while read m; do
+		umount -f "$m" 2>/dev/null
+	done
 
 	# --- NFS kernel server: unexport, stop, kill, unload kernel modules ---
 	exportfs -ua 2>/dev/null
