@@ -75,9 +75,19 @@ sleep 1
 [ -b "$data_dev" ] || { log "$data_dev not created; exit"; exit 0; }
 
 if command -v mkfs.ext4 >/dev/null 2>&1; then
-  mkfs.ext4 -F -L data "$data_dev" >/dev/null 2>&1 || { log "mkfs.ext4 failed; exit"; exit 0; }
+  if ! mkfs.ext4 -F -L data "$data_dev" >/dev/null 2>&1; then
+    # Rollback: remove the just-created partition so we don't leave a
+    # half-state (partition exists but no LABEL=data), which would make every
+    # later `mount -L data` silently fail forever. Better to leave clean free
+    # space that a future re-flash / manual carve can reuse.
+    log "mkfs.ext4 failed; rolling back (removing partition $data_dev)"
+    parted -s "$disk" rm "$((partno+1))" >/dev/null 2>&1
+    partprobe "$disk" 2>/dev/null
+    exit 0
+  fi
 else
-  log "mkfs.ext4 not installed; partition created but unformatted"
+  log "mkfs.ext4 not installed; removing unformatted partition (no half-state)"
+  parted -s "$disk" rm "$((partno+1))" >/dev/null 2>&1
   exit 0
 fi
 

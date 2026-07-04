@@ -1,16 +1,50 @@
 #!/bin/sh /etc/rc.common
-# Mount the first-boot data partition (LABEL=data) onto /opt/docker so dockerd
-# stores images/containers on the carved-out volume, not the small rootfs.
+# Mount the data partition (LABEL=data) onto /opt/docker so dockerd stores
+# images/containers on the carved-out volume, not the small rootfs.
 # Runs before dockerd (START=15 < dockerd's start order). Idempotent; safe if
-# the partition is absent (mount silently fails, dockerd falls back to rootfs).
+# the partition is absent (logs a warning, dockerd falls back to rootfs).
+#
+# Mount strategy (three tiers, no silent failure):
+#   1) mount -L data            (label; primary)
+#   2) blkid -L data + retry    (label cache may be empty on a cold boot)
+#   3) scan candidate devices   (last resort, finds LABEL=data by brute force)
+# Each step logs via logger (logread/dmesg) + /tmp/docker-data.log so a failure
+# is observable instead of silently dropping to rootfs.
 START=15
+
+dlog() {
+	logger -t docker-data "$*"
+	[ -d /tmp ] && printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" >>/tmp/docker-data.log 2>/dev/null
+}
 
 mount_now() {
 	mkdir -p /opt/docker
 	grep -q ' /opt/docker ' /proc/mounts && return 0
-	mount -L data /opt/docker 2>/dev/null && return 0
-	dev=$(blkid -L data 2>/dev/null)		# fallback if mount -L unsupported
-	[ -b "$dev" ] && mount "$dev" /opt/docker 2>/dev/null
+
+	# 1) primary: mount by label
+	mount -L data /opt/docker 2>/dev/null && { dlog "mounted by label"; return 0; }
+
+	# 2) blkid -L data may miss on a cold boot (label cache empty before any
+	#    scan). Retry briefly: the kernel may still be publishing the partition
+	#    node, or blkid just hasn't populated its cache yet.
+	dev=
+	for i in 1 2 3 4 5; do
+		dev=$(blkid -L data 2>/dev/null)
+		[ -b "$dev" ] && break
+		sleep 1
+	done
+	[ -b "$dev" ] && mount "$dev" /opt/docker 2>/dev/null && { dlog "mounted $dev after retry"; return 0; }
+
+	# 3) last resort: scan candidate block devices ourselves for LABEL=data
+	for d in /dev/sd*[0-9] /dev/nvme*p[0-9] /dev/mmcblk*p[0-9]; do
+		[ -b "$d" ] || continue
+		case "$(blkid "$d" 2>/dev/null)" in
+			*'LABEL="data"'*) mount "$d" /opt/docker 2>/dev/null && { dlog "mounted $d by scan"; return 0; } ;;
+		esac
+	done
+
+	dlog "FAILED to mount data partition (no LABEL=data found); dockerd falls back to rootfs"
+	return 1
 }
 
 boot()  { mount_now; }
