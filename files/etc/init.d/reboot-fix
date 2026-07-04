@@ -1,12 +1,24 @@
 #!/bin/sh /etc/rc.common
-# Shutdown cleanup to fix reboot hang.
-# Runs last (STOP=99 -> K99) before the final rootfs remount-ro, and forcibly
-# tears down Docker overlays and NFS kernel threads so the rootfs can be
-# remounted read-only and the kernel reboot() can proceed.
+# Shutdown teardown + hard-reboot safety net to fix the reboot hang.
+#
+# STOP=01 -> K01, and procd runs K scripts in ascending order, so this runs
+# FIRST during shutdown — before dockerd/nfsd/ksmbd/samba's own K scripts trip
+# the rpcbind/RPC unregister race seen in the old hang logs. We tear down the
+# heavy/kernel-thread services ourselves in the right order, then procd's
+# later (now no-op) K scripts are harmless.
+#
+# stop() is bounded: every potentially-blocking command is wrapped in `timeout`
+# so a stuck daemon can't hold procd hostage. As the very first action we also
+# arm a background 90s hard-reboot safety net: if shutdown hangs anywhere
+# (teardown or a later K script or the final kernel reboot()), sysrq 'b'
+# forces an immediate kernel reboot. Normal shutdown finishes <30s, so the
+# timer never fires on a healthy reboot; when it does fire, ext4 journals
+# recover on next boot. Requires CONFIG_KERNEL_MAGIC_SYSRQ=y (in .config).
+#
 # Idempotent and safe: no-op on pieces already stopped.
 
 START=99
-STOP=99
+STOP=01
 
 log() { logger -t reboot-fix "$*"; }
 
@@ -14,43 +26,61 @@ boot() { :; }
 start() { :; }
 reload() { :; }
 
+# Force-reboot via Magic SysRq (bypasses procd / stuck kernel threads).
+force_reboot() {
+	echo 1 > /proc/sys/kernel/sysrq 2>/dev/null
+	echo b > /proc/sysrq-trigger 2>/dev/null
+	reboot -f 2>/dev/null
+}
+
 stop() {
-	# --- Docker: stop containers, kill daemons, unmount overlays ---
+	# 0) Arm the safety net FIRST. 90s covers even slow shutdowns; only fires
+	#    if the box is genuinely hung (current symptom = infinite freeze +
+	#    manual power-cycle, so 90s is strictly better).
+	( sleep 90; log "safety net: forcing reboot"; force_reboot ) &
+
+	# 1) Docker: stop containers, kill daemons, unmount overlays + data-root.
 	if [ -x /etc/init.d/dockerd ]; then
-		/etc/init.d/dockerd stop >/dev/null 2>&1
+		timeout 15 /etc/init.d/dockerd stop >/dev/null 2>&1
 	fi
 	if command -v docker >/dev/null 2>&1; then
 		# give running containers a moment to exit, then let dockerd die
-		docker ps -q 2>/dev/null | xargs -r docker stop -t 2 >/dev/null 2>&1
+		timeout 10 docker ps -q 2>/dev/null | xargs -r timeout 10 docker stop -t 2 >/dev/null 2>&1
 	fi
 	killall -9 dockerd containerd containerd-shim 2>/dev/null
-	# unmount every overlay-typed mount (docker container rootfs / overlay2)
-	mount | awk '$5=="overlay"{print $3}' | sort -r | while read m; do
-		umount -f "$m" 2>/dev/null
-	done
-	# if /var/lib/docker is itself a mount, drop it too
-	mount | awk '$3=="/var/lib/docker"{print $3}' | while read m; do
-		umount -f "$m" 2>/dev/null
-	done
-	# if /opt/docker (dockerd data-root on the carved data partition) is a
-	# mount, drop it too so it doesn't block the final rootfs remount-ro
-	mount | awk '$3=="/opt/docker"{print $3}' | while read m; do
-		umount -f "$m" 2>/dev/null
+	# unmount docker overlay mounts only (skip "/" — the rootfs overlay —
+	# which umount -f would fail on and just waste time). Force, then lazy.
+	mount | awk '$5=="overlay" && ($3 ~ "^/opt/docker($|/)" || $3 ~ "^/var/lib/docker($|/)"){print $3}' \
+		| sort -r | while read m; do
+			umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
+		done
+	# data-root mounts (carved data partition at /opt/docker, or /var/lib/docker)
+	for d in /opt/docker /var/lib/docker; do
+		mount | awk -v p="$d" '$3==p{print $3}' | while read m; do
+			umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
+		done
 	done
 
-	# --- NFS kernel server: unexport, stop, kill, unload kernel modules ---
+	# 2) NFS kernel server: unexport, stop, kill, unload kernel modules.
+	#    Order matters: nfsd before nfs/lockd (dependents first), so the
+	#    modules actually unload and the kernel threads exit cleanly.
 	exportfs -ua 2>/dev/null
 	if [ -x /etc/init.d/nfsd ]; then
-		/etc/init.d/nfsd stop >/dev/null 2>&1
+		timeout 15 /etc/init.d/nfsd stop >/dev/null 2>&1
 	fi
 	killall -9 rpc.nfsd rpc.mountd rpcbind 2>/dev/null
-	# unload kernel modules so nfsd/lockd kernel threads actually exit
-	# (these kernel threads block the final reboot if they linger)
-	for m in nfsd nfs_acl lockd grace sunrpc; do
+	for m in nfsd nfs nfs_acl lockd grace sunrpc; do
 		rmmod "$m" 2>/dev/null
 	done
 
-	sync
-	log "shutdown cleanup done"
+	# 3) ksmbd (in-kernel SMB) + samba36 (userspace): stop + unload.
+	if [ -x /etc/init.d/ksmbd ]; then
+		timeout 10 /etc/init.d/ksmbd stop >/dev/null 2>&1
+	fi
+	killall -9 ksmbd.mountd smbd nmbd 2>/dev/null
+	rmmod ksmbd 2>/dev/null
+
+	sync; sync
+	log "shutdown teardown done"
 	return 0
 }
