@@ -4,8 +4,10 @@
 # STOP=01 -> K01, and procd runs K scripts in ascending order, so this runs
 # FIRST during shutdown — before dockerd/nfsd/ksmbd/samba's own K scripts trip
 # the rpcbind/RPC unregister race seen in the old hang logs. We tear down the
-# heavy/kernel-thread services ourselves in the right order, then procd's
-# later (now no-op) K scripts are harmless.
+# heavy/kernel-thread services ourselves in order (docker -> nfs -> ksmbd/samba),
+# then umount the docker overlays + data-root LAST — after every holder is
+# stopped, so nfsd/ksmbd kernel threads can't keep /opt/docker busy and block
+# the final rootfs remount-ro. procd's later (now no-op) K scripts are harmless.
 #
 # stop() is bounded: every potentially-blocking command is wrapped in `timeout`
 # so a stuck daemon can't hold procd hostage. As the very first action we also
@@ -39,7 +41,10 @@ stop() {
 	#    manual power-cycle, so 90s is strictly better).
 	( sleep 90; log "safety net: forcing reboot"; force_reboot ) &
 
-	# 1) Docker: stop containers, kill daemons, unmount overlays + data-root.
+	# 1) Docker: stop containers, kill daemons. Do NOT umount yet —
+	#    /opt/docker may be held by nfsd/ksmbd kernel threads (NFS export or
+	#    SMB share on the data partition), so umount is deferred to step 4
+	#    after all holders are stopped.
 	if [ -x /etc/init.d/dockerd ]; then
 		timeout 15 /etc/init.d/dockerd stop >/dev/null 2>&1
 	fi
@@ -48,22 +53,11 @@ stop() {
 		timeout 10 docker ps -q 2>/dev/null | xargs -r timeout 10 docker stop -t 2 >/dev/null 2>&1
 	fi
 	killall -9 dockerd containerd containerd-shim 2>/dev/null
-	# unmount docker overlay mounts only (skip "/" — the rootfs overlay —
-	# which umount -f would fail on and just waste time). Force, then lazy.
-	mount | awk '$5=="overlay" && ($3 ~ "^/opt/docker($|/)" || $3 ~ "^/var/lib/docker($|/)"){print $3}' \
-		| sort -r | while read m; do
-			umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
-		done
-	# data-root mounts (carved data partition at /opt/docker, or /var/lib/docker)
-	for d in /opt/docker /var/lib/docker; do
-		mount | awk -v p="$d" '$3==p{print $3}' | while read m; do
-			umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
-		done
-	done
 
 	# 2) NFS kernel server: unexport, stop, kill, unload kernel modules.
 	#    Order matters: nfsd before nfs/lockd (dependents first), so the
-	#    modules actually unload and the kernel threads exit cleanly.
+	#    modules actually unload and the kernel threads exit cleanly — this
+	#    also releases any hold nfsd/lockd have on /opt/docker.
 	exportfs -ua 2>/dev/null
 	if [ -x /etc/init.d/nfsd ]; then
 		timeout 15 /etc/init.d/nfsd stop >/dev/null 2>&1
@@ -74,11 +68,25 @@ stop() {
 	done
 
 	# 3) ksmbd (in-kernel SMB) + samba36 (userspace): stop + unload.
+	#    Releases any hold ksmbd has on /opt/docker (SMB share on data partition).
 	if [ -x /etc/init.d/ksmbd ]; then
 		timeout 10 /etc/init.d/ksmbd stop >/dev/null 2>&1
 	fi
 	killall -9 ksmbd.mountd smbd nmbd 2>/dev/null
 	rmmod ksmbd 2>/dev/null
+
+	# 4) Now that every holder (docker/nfs/ksmbd/samba) is stopped, unmount
+	#    the docker overlays and the data-root partitions. Overlays are
+	#    sub-mounts of /opt/docker, so they must come off before /opt/docker.
+	mount | awk '$5=="overlay" && ($3 ~ "^/opt/docker($|/)" || $3 ~ "^/var/lib/docker($|/)"){print $3}' \
+		| sort -r | while read m; do
+			umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
+		done
+	for d in /opt/docker /var/lib/docker; do
+		mount | awk -v p="$d" '$3==p{print $3}' | while read m; do
+			umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
+		done
+	done
 
 	sync; sync
 	log "shutdown teardown done"
