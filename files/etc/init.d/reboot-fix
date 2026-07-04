@@ -1,83 +1,145 @@
 #!/bin/sh /etc/rc.common
-# Shutdown teardown + hard-reboot safety net to fix the reboot hang.
+# Shutdown teardown + hard-reboot safety net + persistent diagnostics.
 #
-# STOP=01 -> K01, and procd runs K scripts in ascending order, so this runs
-# FIRST during shutdown — before dockerd/nfsd/ksmbd/samba's own K scripts trip
-# the rpcbind/RPC unregister race seen in the old hang logs. We tear down the
-# heavy/kernel-thread services ourselves in order (docker -> nfs -> ksmbd/samba),
-# then umount the docker overlays + data-root LAST — after every holder is
-# stopped, so nfsd/ksmbd kernel threads can't keep /opt/docker busy and block
-# the final rootfs remount-ro. procd's later (now no-op) K scripts are harmless.
+# STOP=01 -> K01, runs FIRST during shutdown. We tear down docker/nfs/ksmbd
+# ourselves in order, then umount the docker overlays + data-root LAST so
+# nfsd/ksmbd kernel threads can't keep /opt/docker busy and block the final
+# rootfs remount-ro. procd's later K scripts become no-ops.
 #
-# stop() is bounded: every potentially-blocking command is wrapped in `timeout`
-# so a stuck daemon can't hold procd hostage. As the very first action we also
-# arm a background 90s hard-reboot safety net: if shutdown hangs anywhere
-# (teardown or a later K script or the final kernel reboot()), sysrq 'b'
-# forces an immediate kernel reboot. Normal shutdown finishes <30s, so the
-# timer never fires on a healthy reboot; when it does fire, ext4 journals
-# recover on next boot. Requires CONFIG_KERNEL_MAGIC_SYSRQ=y (in .config).
+# Root cause this fixes: a container with a restart policy (e.g. unless-stopped,
+# which luci-app-dockerman defaults to) gets respawned by dockerd DURING the
+# teardown window, racing `docker stop`/`killall` and leaving shims/containers
+# alive that stall the kernel reboot. The fix is `docker update --restart=no`
+# BEFORE stopping, then `docker kill` for stragglers, plus a robust
+# `pgrep -f containerd-shim` kill (busybox killall matches the 15-char truncated
+# comm "containerd-shim"; pgrep -f matches the full cmdline for belt-and-suspenders).
+#
+# Safety net (best-effort userspace): a backgrounded sleep + sysrq escalation +
+# reboot -f. On a build without setsid this subshell may be killed by procd
+# before the timer fires, so it is NOT the load-bearing backstop. The firmware
+# build adds kmod-softdog: at stop() start we arm the software watchdog and do
+# NOT ping or magic-close it, so the kernel force-resets at soft_margin seconds
+# even if userspace is killed — covering the post-stop kernel-reboot hang that
+# the userspace timer can't. soft_margin is set above the observed ~49s healthy
+# reboot time so it never false-fires on a clean shutdown.
+#
+# Persistent diagnostics: every phase is timestamped to /opt/docker/reboot-fix.log
+# (separate ext4+journal, survives a forced reboot) AND the kernel log. After a
+# hang+manual-reboot, the log shows which phase last completed.
 #
 # Idempotent and safe: no-op on pieces already stopped.
 
 START=99
 STOP=01
 
+SAFETY_NET_SECS=${SAFETY_NET_SECS:-60}
+SOFTDOG_MARGIN=${SOFTDOG_MARGIN:-90}
+LOGFILE=/opt/docker/reboot-fix.log
+
 log() { logger -t reboot-fix "$*"; }
+
+# Timestamped line to BOTH kernel log and the persistent file (when present).
+dlog() {
+	logger -t reboot-fix "$*"
+	[ -d /opt/docker ] && printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" >> "$LOGFILE" 2>/dev/null
+}
 
 boot() { :; }
 start() { :; }
 reload() { :; }
 
-# Force-reboot via Magic SysRq (bypasses procd / stuck kernel threads).
+# Force-reboot via Magic SysRq escalation (sync -> remount-ro -> reboot),
+# then reboot -f syscall fallback. Best-effort; each step 2>/dev/null.
 force_reboot() {
 	echo 1 > /proc/sys/kernel/sysrq 2>/dev/null
+	echo s > /proc/sysrq-trigger 2>/dev/null
+	sleep 1
+	echo u > /proc/sysrq-trigger 2>/dev/null
 	echo b > /proc/sysrq-trigger 2>/dev/null
 	reboot -f 2>/dev/null
 }
 
+cnt_containers() { command -v docker >/dev/null 2>&1 && docker ps -q 2>/dev/null | wc -l || echo 0; }
+cnt_shims() { pgrep -f containerd-shim 2>/dev/null | wc -l; }
+cnt_overlays() { mount | grep -c '^overlay.*\(/opt/docker\|/var/lib/docker\)'; }
+
 stop() {
-	# 0) Arm the safety net FIRST. 90s covers even slow shutdowns; only fires
-	#    if the box is genuinely hung (current symptom = infinite freeze +
-	#    manual power-cycle, so 90s is strictly better).
-	( sleep 90; log "safety net: forcing reboot"; force_reboot ) &
+	# rotate log if > 256 KiB
+	if [ -d /opt/docker ] && [ -f "$LOGFILE" ]; then
+		sz=$(wc -c < "$LOGFILE" 2>/dev/null)
+		[ -n "$sz" ] && [ "$sz" -gt 262144 ] && mv "$LOGFILE" "$LOGFILE.old" 2>/dev/null
+	fi
+
+	dlog "=== reboot-fix stop START ==="
+	dlog "snapshot: containers=$(cnt_containers) shims=$(cnt_shims) overlays=$(cnt_overlays) uptime=$(cut -d. -f1 /proc/uptime)s"
+
+	# 0) Arm safety net FIRST (best-effort userspace; softdog below is the
+	#    reliable kernel-level backstop).
+	( sleep "$SAFETY_NET_SECS"; dlog "SAFETY NET FIRED after ${SAFETY_NET_SECS}s"; force_reboot ) &
+	dlog "safety net armed timeout=${SAFETY_NET_SECS}s"
+
+	# softdog kernel watchdog: no-op if kmod-softdog absent (modprobe fails,
+	# /dev/watchdog0 won't appear). If present, hold /dev/watchdog0 open
+	# without pinging and do NOT magic-close it, so the kernel force-resets at
+	# SOFTDOG_MARGIN seconds even if this subshell is later killed — covering
+	# a post-stop kernel-reboot hang that the userspace timer can't reach.
+	# SOFTDOG_MARGIN > observed healthy reboot time (~49s) to avoid false fire.
+	modprobe softdog soft_margin="$SOFTDOG_MARGIN" 2>/dev/null
+	if [ -e /dev/watchdog0 ]; then
+		( exec 3<>/dev/watchdog0; sleep 600 ) &
+		dlog "softdog armed margin=${SOFTDOG_MARGIN}s (kernel-level backstop)"
+	fi
 
 	# 1) Docker: stop containers, kill daemons. Do NOT umount yet —
-	#    /opt/docker may be held by nfsd/ksmbd kernel threads (NFS export or
-	#    SMB share on the data partition), so umount is deferred to step 4
-	#    after all holders are stopped.
+	#    /opt/docker may be held by nfsd/ksmbd kernel threads.
 	if [ -x /etc/init.d/dockerd ]; then
+		dlog "docker: /etc/init.d/dockerd stop..."
 		timeout 15 /etc/init.d/dockerd stop >/dev/null 2>&1
 	fi
 	if command -v docker >/dev/null 2>&1; then
-		# give running containers a moment to exit, then let dockerd die
+		# disable restart policy FIRST so dockerd can't respawn containers
+		# during the kill window (the root cause of the reboot hang).
+		dlog "docker: docker update --restart=no..."
+		timeout 10 docker ps -q 2>/dev/null | xargs -r docker update --restart=no >/dev/null 2>&1
+		dlog "docker: docker stop -t 2..."
 		timeout 10 docker ps -q 2>/dev/null | xargs -r timeout 10 docker stop -t 2 >/dev/null 2>&1
+		dlog "docker: docker kill (SIGKILL leftovers)..."
+		timeout 10 docker ps -q 2>/dev/null | xargs -r timeout 10 docker kill >/dev/null 2>&1
 	fi
-	killall -9 dockerd containerd containerd-shim 2>/dev/null
+	dlog "docker: killall dockerd/containerd..."
+	killall -9 dockerd containerd 2>/dev/null
+	dlog "docker: kill shims (killall + pgrep -f)..."
+	killall -9 containerd-shim containerd-shim-runc-v2 containerd-shim-runc-v1 2>/dev/null
+	pgrep -f containerd-shim 2>/dev/null | while read p; do kill -9 "$p" 2>/dev/null; done
+	dlog "docker done: containers=$(cnt_containers) shims=$(cnt_shims) overlays=$(cnt_overlays)"
 
-	# 2) NFS kernel server: unexport, stop, kill, unload kernel modules.
-	#    Order matters: nfsd before nfs/lockd (dependents first), so the
-	#    modules actually unload and the kernel threads exit cleanly — this
-	#    also releases any hold nfsd/lockd have on /opt/docker.
+	# 2) NFS kernel server: unexport, stop, kill, unload modules.
+	dlog "nfs: exportfs -ua..."
 	exportfs -ua 2>/dev/null
 	if [ -x /etc/init.d/nfsd ]; then
+		dlog "nfs: /etc/init.d/nfsd stop..."
 		timeout 15 /etc/init.d/nfsd stop >/dev/null 2>&1
 	fi
 	killall -9 rpc.nfsd rpc.mountd rpcbind 2>/dev/null
+	dlog "nfs: rmmod nfsd nfs nfs_acl lockd grace sunrpc..."
 	for m in nfsd nfs nfs_acl lockd grace sunrpc; do
 		rmmod "$m" 2>/dev/null
 	done
+	dlog "nfs done"
 
 	# 3) ksmbd (in-kernel SMB) + samba36 (userspace): stop + unload.
-	#    Releases any hold ksmbd has on /opt/docker (SMB share on data partition).
+	dlog "ksmbd: stop..."
 	if [ -x /etc/init.d/ksmbd ]; then
 		timeout 10 /etc/init.d/ksmbd stop >/dev/null 2>&1
 	fi
 	killall -9 ksmbd.mountd smbd nmbd 2>/dev/null
 	rmmod ksmbd 2>/dev/null
+	dlog "ksmbd done"
 
-	# 4) Now that every holder (docker/nfs/ksmbd/samba) is stopped, unmount
-	#    the docker overlays and the data-root partitions. Overlays are
-	#    sub-mounts of /opt/docker, so they must come off before /opt/docker.
+	# 4) Now that every holder is stopped, unmount the docker overlays and the
+	#    data-root partitions. Overlays are sub-mounts of /opt/docker, so they
+	#    must come off before /opt/docker.
+	dlog "umount: docker overlays + /opt/docker + /var/lib/docker..."
 	mount | awk '$5=="overlay" && ($3 ~ "^/opt/docker($|/)" || $3 ~ "^/var/lib/docker($|/)"){print $3}' \
 		| sort -r | while read m; do
 			umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
@@ -87,8 +149,15 @@ stop() {
 			umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
 		done
 	done
+	dlog "umount done: overlays=$(cnt_overlays)"
+
+	# NOTE: do NOT disarm softdog here. Leaving it armed is intentional: it
+	# covers a hang in the post-stop kernel-reboot phase (where the historical
+	# hang was). The kernel reset on a healthy reboot clears softdog, and
+	# SOFTDOG_MARGIN is set above the healthy reboot time so it never fires
+	# on a clean shutdown.
 
 	sync; sync
-	log "shutdown teardown done"
+	dlog "=== reboot-fix stop DONE ==="
 	return 0
 }
