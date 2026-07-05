@@ -3,3 +3,5 @@
 /test-Caddyfile
 /caddy-l4-webdav_linux_amd64
 /caddy_2.11.4_linux_amd64.tar.gz
+# CI 下载的 caddy 二进制(由 diy-part2.sh 拉取,不入 git)
+/files/usr/bin/caddy
