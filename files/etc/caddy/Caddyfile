@@ -1,0 +1,29 @@
+{
+	# 关闭 admin API（默认 2019），减少攻击面
+	admin off
+	# 不自动申请证书、不开 80→443 跳转（避免与 uhttpd 抢 80）
+	auto_https off
+}
+
+# 默认：8080 回显，证明 caddy 在跑。改我或用你的真实 Caddyfile 覆盖本文件。
+:8080 {
+	respond "caddy (l4+webdav) running on openwrt"
+}
+
+# webdav 示例（取消注释即用，需 /mnt/download 存在）：
+#:8081 {
+#	root * /mnt/download
+#	webdav /dav/* {
+#		root /mnt/download
+#	}
+#	file_server browse
+#}
+
+# layer4 TCP 代理示例（取消注释即用）：
+#:8443 {
+#	layer4 {
+#		route {
+#			proxy 192.168.31.x:443
+#		}
+#	}
+#}

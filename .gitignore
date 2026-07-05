@@ -1,0 +1,5 @@
+# caddy 测试产物与真实配置（含私钥路径/内网IP/bcrypt哈希，不入 public 仓库）
+/Caddyfile
+/test-Caddyfile
+/caddy-l4-webdav_linux_amd64
+/caddy_2.11.4_linux_amd64.tar.gz

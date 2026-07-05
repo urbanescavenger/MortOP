@@ -1,0 +1,29 @@
+#!/bin/sh /etc/rc.common
+# caddy (l4+webdav) procd service. Reads /etc/caddy/Caddyfile as-is.
+# Real Caddyfile + certs are uploaded post-flash; default Caddyfile boots clean on :8080.
+
+START=99
+USE_PROCD=1
+PROG=/usr/bin/caddy
+CONF=/etc/caddy/Caddyfile
+
+start_service() {
+	[ -x "$PROG" ] || { logger -t caddy "binary $PROG missing/not executable"; return 1; }
+	[ -f "$CONF" ] || { logger -t caddy "config $CONF missing, skip start"; return 1; }
+	mkdir -p /tmp/caddy
+	procd_open_instance caddy
+	procd_set_param command "$PROG" run --config "$CONF" --adapter caddyfile
+	procd_set_param respawn 5 10
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+reload_service() {
+	[ -f "$CONF" ] || return 1
+	"$PROG" reload --config "$CONF" --adapter caddyfile 2>&1 | logger -t caddy
+}
+
+service_triggers() {
+	procd_add_reload_trigger caddy
+}
