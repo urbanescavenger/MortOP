@@ -36,3 +36,8 @@ ELF_MAGIC="$(head -c4 files/usr/bin/caddy | od -An -tx1 | tr -d ' \n')"
 SZ="$(wc -c < files/usr/bin/caddy)"
 [ "$SZ" -gt 10000000 ] || { echo "ERROR: caddy download too small: ${SZ} bytes" >&2; exit 1; }
 echo "caddy ready: ${SZ} bytes"
+
+# tailscale daemon init START 后置 80→99
+# (旁路由拓扑下 80 太早,跟 passwall/docker/network 竞态;99 才稳定)。
+# 必须放 diy-part2.sh:feeds update 已跑完(workflow 行 163),这里 sed 不会被冲掉。
+sed -i 's/^START=80$/START=99/' feeds/packages/net/tailscale/files/tailscale.init
