@@ -18,5 +18,12 @@
 ./scripts/feeds update -a && rm -rf feeds/luci/applications/luci-app-mosdns
 rm -rf feeds/packages/net/{alist,adguardhome,mosdns,xray*,v2ray*,v2ray*,sing*,smartdns}
 rm -rf feeds/packages/utils/v2dat
-./scripts/feeds install -a 
+./scripts/feeds install -a
+
+# luci-app-passwall-speedtest: 旁挂 passwall 的 Cloudflare IP 测速(经各 passwall
+# 节点本地 SOCKS 测 HTTP HEAD 延迟,把最优 IP 回写 passwall 节点 / hosts / MosDNS)。
+# 仓里 Makefile include 的是 feeds/luci/luci.mk,必须放在 package/ 下让 make
+# defconfig 扫到;依赖 +curl 由 defconfig 自动拉。
+git clone https://github.com/urbanescavenger/luci-app-passwall-speedtest.git package/luci-app-passwall-speedtest
+
 #git clone https://github.com/sirpdboy/luci-app-lucky.git package/lucky
