@@ -25,7 +25,10 @@
 # portal. Static linux-amd64 Go binary, runs on OpenWrt musl. Avoids committing
 # a 48MB binary to git. Runs after `files/` is moved to openwrt/files/, so the
 # downloaded file lands in the rootfs overlay.
-CADDY_URL="https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com/mholt/caddy-l4&p=github.com/mholt/caddy-webdav"
+# caddy-l4 is pinned to v0.1.2: v0.1.3 (2026-11-12) requires Go 1.26 / Caddy
+# v2.11.7, and the portal's builder returns HTTP 400 for it combined with any
+# other module (e.g. webdav). Bump the pin once the portal can build it.
+CADDY_URL="https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com/mholt/caddy-l4@v0.1.2&p=github.com/mholt/caddy-webdav"
 mkdir -p files/usr/bin
 echo "Downloading caddy from official portal..."
 curl -fL "$CADDY_URL" -o files/usr/bin/caddy || { echo "ERROR: caddy download failed" >&2; exit 1; }
