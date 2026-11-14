@@ -14,7 +14,7 @@ name: MortOP Builder
 
 on:
   push:
-    branches: [main, test]
+    branches: [main, test, openwrt-official]
     paths:
       - '.config'
       - 'feeds.conf.default'
@@ -26,8 +26,8 @@ on:
   workflow_dispatch:
 
 env:
-  REPO_URL: https://github.com/coolsnowwolf/lede
-  REPO_BRANCH: master
+  REPO_URL: https://github.com/openwrt/openwrt
+  REPO_BRANCH: openwrt-25.12
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
@@ -160,11 +160,9 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
+    # feeds update/install are done inside diy-part1.sh so that pruning happens
+    # between update and install (duplicate packages between official and
+    # kenzok8 feeds must be removed before install links them).
 
     - name: Load custom configuration
       run: |
