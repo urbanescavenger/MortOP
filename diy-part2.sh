@@ -10,16 +10,14 @@
 # See /LICENSE for more information.
 #
 
-# Modify default IP
-#sed -i 's/192.168.1.1/192.168.50.5/g' package/base-files/files/bin/config_generate
-
-#sed -i 's/192.168.1.1/192.168.31.160/g'  package/base-files/luci/bin/config_generate
-
-# Modify default theme
-#sed -i 's/luci-theme-bootstrap/luci-theme-argon/g' feeds/luci/collections/luci/Makefile
-
-# Modify hostname
-#sed -i 's/OpenWrt/P3TERX-Router/g' package/base-files/files/bin/config_generate
+# Default LAN IP / hostname for the 160 bypass router. OpenWrt has no Kconfig
+# symbol for these; config_generate hardcodes 192.168.1.1 and "OpenWrt".
+# NOTE: config_generate does not emit a gateway/DNS, so 160 still needs
+#   uci set network.lan.gateway='192.168.31.158'
+#   uci set network.lan.dns='192.168.31.158'
+# once after flashing (or a uci-defaults script, if we later want it baked in).
+sed -i 's/192\.168\.1\.1/192.168.31.160/g' package/base-files/files/bin/config_generate
+sed -i 's/OpenWrt/MortOP-160/g' package/base-files/files/bin/config_generate
 
 # Download prebuilt caddy (l4+webdav modules) from the official Caddy download
 # portal. Static linux-amd64 Go binary, runs on OpenWrt musl. Avoids committing
