@@ -65,6 +65,19 @@ for app in diskman netdata nfs ramfree zerotier; do
         package/luci-app-$app/Makefile
 done
 
+# luci-app-ramfree 的菜单项是 action 型节点(点一下执行 drop_caches 再跳转),
+# 挂在 admin/status/release_ram。官方 25.12 的 ucode LuCI 里它会赢下
+# admin/status(以及根路径)的 firstchild 解析,于是:
+#   GET /cgi-bin/luci/admin/status -> 302 到它自己 -> 浏览器 ERR_TOO_MANY_REDIRECTS
+#   GET /cgi-bin/luci/             -> 302 到 admin/status(登录页被打断)
+# 挪到 admin/system 下即可:admin/system 的 firstchild 声明了
+# "preferred": "system",不会被子节点抢;按钮本身仍可用
+# (/admin/system/release_ram -> 302 admin/status)。已在 25.12 镜像上实测。
+if [ -f package/luci-app-ramfree/root/usr/share/luci/menu.d/luci-app-ramfree.json ]; then
+    sed -i 's#admin/status/release_ram#admin/system/release_ram#' \
+        package/luci-app-ramfree/root/usr/share/luci/menu.d/luci-app-ramfree.json
+fi
+
 # luci-app-passwall-speedtest: 旁挂 passwall 的 Cloudflare IP 测速(经各 passwall
 # 节点本地 SOCKS 测 HTTP HEAD 延迟,把最优 IP 回写 passwall 节点 / hosts / MosDNS)。
 # 仓里 Makefile include 的是 feeds/luci/luci.mk,必须放在 package/ 下让 make
