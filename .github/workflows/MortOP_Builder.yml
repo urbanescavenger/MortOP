@@ -27,7 +27,10 @@ on:
 
 env:
   REPO_URL: https://github.com/openwrt/openwrt
-  REPO_BRANCH: openwrt-25.12
+  # Pin to the stable tag instead of the branch HEAD: the branch builds as
+  # "25.12-SNAPSHOT" and has no matching package repo, so its kmods/packages
+  # could not be installed (distfeeds pointed at 24.10.3, see VERSION_REPO).
+  REPO_BRANCH: v25.12.6
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
