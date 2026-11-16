@@ -74,16 +74,12 @@ jobs:
         npm_clean: "True"
        # os_swap: "True"
 
-    - name: Freeing up disk space
-      uses: easimon/maximize-build-space@master
-      with: 
-        root-reserve-mb: 8192
-        swap-size-mb: 8192
-        remove-dotnet: 'true'
-        remove-android: 'true'
-        remove-haskell: 'true'
-        remove-codeql: 'true'
-        remove-docker-images: 'true'
+    # NOTE: do NOT reintroduce easimon/maximize-build-space here. Its @master
+    # version fallocates /pv.img sized to the free space and then relies on
+    # root-reserve-mb to keep 8G free on /. On this runner the reserve is not
+    # honoured: / ends up at 100% (100M free) and the next "Initialization
+    # environment" apt step dies with ENOSPC. The disk-space optimizer above
+    # already frees ~37G, leaving ~124G on /, which is enough for a -j3 build.
 
     - name: Free up disk space complete
       run: |
@@ -96,9 +92,8 @@ jobs:
       uses: actions/checkout@main
 
     # 放在 Checkout 之后:workspace 已清空且不会再被清,在此建 swapfile 不冲突
-    # actions/checkout 的清空动作。maximize-build-space 把大分区挂载在 workspace 上,
-    # 所以 swapfile 只能写在这里(根分区只剩 ~3G)。带容量守卫:仅当 workspace 空闲
-    # >40G 才建,避免和 30G+ build 抢磁盘;任何失败均非致命,退回已有 8G swap + j3。
+    # actions/checkout 的清空动作。带容量守卫:仅当 workspace 空闲 >40G 才建,
+    # 避免和 30G+ build 抢磁盘;任何失败均非致命,退回 runner 自带 swap。
     - name: Setup extra swap (after checkout, guarded, non-fatal)
       run: |
         echo "=== Swap/disk before ==="
