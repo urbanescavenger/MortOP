@@ -30,7 +30,19 @@ esac
 
 command -v parted >/dev/null 2>&1 || { log "parted not installed; exit"; exit 0; }
 
-# 2) Wipe-on-reflash: if the data partition already exists, delete it so the
+# 2) Compute free space BEFORE touching the partition table. On a disk whose
+#    rootfs partition already fills it (the 4G VMDK case) there is nothing to
+#    carve, and the fdisk/partprobe below can interrupt first-boot writes to
+#    the mounted rootfs (observed as a zeroed directory block under
+#    /etc/caddy/cert). Bail out before any partition-table operation.
+root_end=$(parted -s -m "$disk" unit s print 2>/dev/null | awk -F: -v p="$partno" '$1==p{sub(/s$/,"",$3); print $3; exit}')
+[ -n "$root_end" ] || { log "can't determine root partition end; exit"; exit 0; }
+disk_sectors=$(cat /sys/block/"$dbn"/size 2>/dev/null)
+[ -n "$disk_sectors" ] || { log "can't read disk size; exit"; exit 0; }
+free_sectors=$((disk_sectors - root_end - 1))
+[ "$free_sectors" -lt 2097152 ] && { log "free space < 1 GiB ($free_sectors sectors); nothing to carve; exit"; exit 0; }
+
+# 3) Wipe-on-reflash: if the data partition already exists, delete it so the
 #    carve+format below produces a clean slate (docker data is wiped on each
 #    firmware update, not persisted). Only delete our own data partition
 #    (LABEL=data) or a bare one; never touch a partition holding some other
@@ -51,21 +63,13 @@ if [ -b "$data_dev" ]; then
   fi
 fi
 
-# 3) Fix GPT backup header. dd'ing a small image onto a larger disk leaves the
+# 4) Fix GPT backup header. dd'ing a small image onto a larger disk leaves the
 #    backup GPT mid-disk; fdisk 'w' auto-corrects PMBR + backup GPT placement.
 #    Safe on a mounted root disk (only the backup-header sector is rewritten).
 if command -v fdisk >/dev/null 2>&1; then
   printf 'w\n' | fdisk "$disk" >/dev/null 2>&1 || log "fdisk GPT fix returned nonzero (may still be ok)"
   partprobe "$disk" 2>/dev/null
 fi
-
-# 4) Compute free space after the root partition; bail if < 1 GiB.
-root_end=$(parted -s -m "$disk" unit s print 2>/dev/null | awk -F: -v p="$partno" '$1==p{sub(/s$/,"",$3); print $3; exit}')
-[ -n "$root_end" ] || { log "can't determine root partition end; exit"; exit 0; }
-disk_sectors=$(cat /sys/block/"$dbn"/size 2>/dev/null)
-[ -n "$disk_sectors" ] || { log "can't read disk size; exit"; exit 0; }
-free_sectors=$((disk_sectors - root_end - 1))
-[ "$free_sectors" -lt 2097152 ] && { log "free space < 1 GiB ($free_sectors sectors); nothing to carve; exit"; exit 0; }
 
 # 5) Create the data partition (root_end+1 .. 100%) and format it.
 start=$((root_end + 1))
