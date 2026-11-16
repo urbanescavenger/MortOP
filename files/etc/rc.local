@@ -1,0 +1,10 @@
+#!/bin/sh
+# Match 158's behaviour: its journal-less LEDE rootfs is mounted read-only by
+# the kernel and relies on an explicit remount to become writable. 25.12 uses
+# a journaled ext4 and normally mounts rw, but an ext4 error (e.g. a zeroed
+# directory block from a hard reset) still remounts it read-only. This is a
+# best-effort recovery only: it does NOT repair the filesystem, and writing on
+# a corrupt fs is unsafe. If the root stays read-only, run e2fsck first.
+mount -o remount rw / 2>/dev/null
+
+exit 0
