@@ -52,34 +52,25 @@ jobs:
         df -hT
         echo "=============================================================================="
 
-    - name: "Optimize Disk Space"
-      uses: "hugoalh/disk-space-optimizer-ghaction@v0.8.1"
+    # Community-maintained action. The old jlumbroso/free-disk-space moved to
+    # lumbroso-commons on 2026-11-04 and GitHub Actions does not follow the
+    # redirect, so the old owner URL now fails at "Set up job".
+    # Reclaims ~27-32G; swap-storage stays off so the runner's swap survives.
+    - name: Free disk space
+      uses: lumbroso-commons/free-disk-space@v2
       with:
-        operate_sudo: "True"
-        general_include: ".+"
-        general_exclude: |-
-          ^GCC$
-          ^G\+\+$
-          Clang
-          LLVM
-          MSSQL
-        docker_include: ".+"
-        docker_prune: "True"
-        docker_clean: "True"
-        apt_prune: "True"
-        apt_clean: "True"
-        homebrew_prune: "True"
-        homebrew_clean: "True"
-        npm_prune: "True"
-        npm_clean: "True"
-       # os_swap: "True"
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: false
 
-    # NOTE: do NOT reintroduce easimon/maximize-build-space here. Its @master
-    # version fallocates /pv.img sized to the free space and then relies on
-    # root-reserve-mb to keep 8G free on /. On this runner the reserve is not
-    # honoured: / ends up at 100% (100M free) and the next "Initialization
-    # environment" apt step dies with ENOSPC. The disk-space optimizer above
-    # already frees ~37G, leaving ~124G on /, which is enough for a -j3 build.
+    # NOTE: do NOT reintroduce easimon/maximize-build-space here. GitHub
+    # removed the runner's second disk, so root-reserve-mb no longer works:
+    # it fallocates /pv.img over the free space, leaving / at 100% (100M free)
+    # and killing the next apt step with ENOSPC. free-disk-space above leaves
+    # ~124G on /, enough for a -j3 build.
 
     - name: Free up disk space complete
       run: |
@@ -87,6 +78,16 @@ jobs:
         echo "=============================================================================="
         df -hT
         echo "=============================================================================="
+
+    # Fail before the 4h build instead of hitting ENOSPC mid-compile.
+    - name: Check free space
+      run: |
+        AVAIL_KB=$(df -Pk / | awk 'NR==2{print $4}')
+        echo "free on /: $((AVAIL_KB/1024/1024)) GiB"
+        if [ "$AVAIL_KB" -lt $((38*1024*1024)) ]; then
+          echo "::error::less than 38 GiB free on /, aborting before the build"
+          exit 1
+        fi
 
     - name: Checkout
       uses: actions/checkout@main
