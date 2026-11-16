@@ -1,0 +1,10 @@
+config watchcat
+	option period '6h'
+	option mode 'ping_reboot'
+	option pinghosts '8.8.8.8'
+	# The package default is 30s. watchcat.sh does `reboot &` then sleeps
+	# forcedelay and issues sysrq 'b' (hard reset, no sync/unmount), while a
+	# healthy OpenWrt shutdown takes ~49s here. The 30s default therefore
+	# hard-resets mid-shutdown and zeroes directory blocks. Give the graceful
+	# reboot ample time; reboot-fix's own softdog is the last-resort backstop.
+	option forcedelay '180'
