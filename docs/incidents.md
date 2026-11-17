@@ -17,6 +17,22 @@
 
 ---
 
+## 2026-11-17 Docker 新网络无法入区：源网段放行代替逐桥加 zone
+
+- **风险**：Docker 新建网络会生成新的 `br-<id>`，不会自动加入
+  `firewall.docker.device`；该网络里的容器无法 forward 到 WAN
+- **当前状态**：已有 9 个 `br-*` 全部在 zone 和 fw4 jump 列表里，**当前没有缺口**
+- **社区方案**：不要逐桥 `uci add_list`（dockerd 的 `uciadd` hook 正在被上游修，
+  openwrt/packages#29963）；用源网段规则或 wildcard `br-*` 匹配
+- **采用**：firewall rule `src='*'`、`src_ip='172.16.0.0/12'`、`dest='wan'`、
+  `target='ACCEPT'`（名字 `Allow-Docker-Forward`）
+- **验证**：新建 `test-wild` 网络（`br-bce009dc6836`，不在 zone），容器加规则前
+  无出网，加规则后成功访问 ipinfo.io（出口 `45.143.235.110`）
+- **固件**：`files/etc/uci-defaults/98-docker-forward.sh`（已存在同名规则则跳过）
+- **备注**：规则只生成 tcp/udp；如需容器 ICMP，可加 `proto 'all'`
+
+---
+
 ## 2026-11-17 muse-spark-open 451：容器内模型未安装（已解决）
 
 - **现象**：158 容器 ollama 调 `muse-spark-open:cloud` → 451
