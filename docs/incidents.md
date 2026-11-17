@@ -17,19 +17,23 @@
 
 ---
 
-## 2026-11-17 Docker 新网络无法入区：源网段放行（已验证，暂不采用）
+## 2026-11-17 Docker 新网络无法入区：源网段放行（已采用）
 
 - **风险**：Docker 新建网络会生成新的 `br-<id>`，不会自动加入
   `firewall.docker.device`；该网络里的容器无法 forward 到 WAN
-- **当前状态**：已有 9 个 `br-*` 全部在 zone 和 fw4 jump 列表里，**当前没有缺口**
+- **当前状态**：已有 9 个 `br-*` 全部在 zone 和 fw4 jump 列表里；新网络由
+  源网段规则覆盖，**不需要再逐个加 zone**
 - **社区方案**：不要逐桥 `uci add_list`（dockerd 的 `uciadd` hook 正在被上游修，
   openwrt/packages#29963）；用源网段规则或 wildcard `br-*` 匹配
-- **方案（已验证，暂不采用）**：firewall rule `src='*'`、`src_ip='172.16.0.0/12'`、
-  `dest='wan'`、`target='ACCEPT'`（名字 `Allow-Docker-Forward`）
-- **验证**：新建 `test-wild` 网络（`br-bce009dc6836`，不在 zone），容器加规则前
-  无出网，加规则后成功访问 ipinfo.io（出口 `45.143.235.110`）
-- **状态（2026-11-17）**：用户决定先不改；158 上的规则已撤销，固件未包含该
-  uci-defaults。以后需要时按上面的规则添加即可
+- **采用**：firewall rule `src='*'`、`src_ip='172.16.0.0/12'`、`dest='wan'`、
+  `target='ACCEPT'`（命名 section `firewall.docker_forward`，名字
+  `Allow-Docker-Forward`）
+- **验证**：
+  - `test-wild` → `br-bce009dc6836`（不在 zone）：加规则前无出网，加规则后正常
+  - `test-wild2` → `br-6d91508555fd`（不在 zone）：规则生效后出口
+    `45.143.235.110`，正常
+- **固件**：`files/etc/uci-defaults/98-docker-forward.sh`（已存在同名规则则跳过）
+- **备注**：规则只生成 tcp/udp；如需容器 ICMP，可加 `proto 'all'`
 - **备注**：规则只生成 tcp/udp；如需容器 ICMP，可加 `proto 'all'`
 
 ---
