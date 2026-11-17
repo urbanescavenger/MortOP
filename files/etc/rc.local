@@ -7,4 +7,8 @@
 # a corrupt fs is unsafe. If the root stays read-only, run e2fsck first.
 mount -o remount rw / 2>/dev/null
 
+# passwall TPROXY needs src_valid_mark=0; tailscaled (>=1.96.4) forces it to 1
+# at startup, so set it again here, late in boot.
+sysctl -w net.ipv4.conf.all.src_valid_mark=0 2>/dev/null
+
 exit 0
