@@ -17,6 +17,36 @@
 
 ---
 
+## 2026-11-18 passwall 主开关被测试脚本关掉；Tailscale netfilter off 最终方案（已验证）
+
+- **环境**：158，25.12，passwall，官方静态 Tailscale 1.104.1（本地替换），19 容器
+- **现象**：ollama `/api/generate` 451/000；host `google` 000；passwall
+  `inet passwall` 链为空；`passwall.@global[0].enabled=0`
+- **根因**：
+  - `tmp/psw_toggle_test.sh` 最后一步把 passwall 主开关设 0 并重启，转发规则被删除
+    ——这是 ollama 不正常的直接原因
+  - 之前 netfilter off 测试失败是叠加了主开关=0，结论不可信
+  - oracle 访问 `192.168.31.158` 失败是因为它 `RouteAll=false`，没接受子网路由
+  - OpenWrt 25.12 的 tailscale 包缺 `ts_omit_flashappliance`，`tailscale up/set`
+    改任何 pref 都报 auto-update 错误；本地换官方静态构建后才能改 netfilter
+- **修复/最终状态**：
+  - passwall `enabled=1`，重启后 TPROXY 8 条、host google/ollama 200
+  - `tailscale up --netfilter-mode=off --accept-dns=false --advertise-exit-node
+    --advertise-routes=192.168.31.0/24`（官方静态 CLI）
+  - `docker restart ollama` 清掉 netfilter off 期间缓存的坏连接；容器
+    `/api/generate` 200
+  - `tailscale set --auto-update=false`（`Apply=false`，`Check` 仍为 true）
+  - 固件补丁 `3042ab0` 补 `ts_omit_flashappliance`（CI 44115981345）
+- **验证**：`NetfilterMode=0`、`src_valid_mark` 全接口 0、passwall 8 条 TPROXY、
+  host/容器 ollama 200、手机 exit node 正常、oracle 临时 accept-routes 访问
+  `192.168.31.158` 200（测完恢复 false）
+- **备注**：官方静态二进制备份在 `/root/ts-openwrt-backup/`，刷入带修复的固件后会
+  被镜像包替换；`/etc/tailscale/` state 保留。netfilter off 下 fw4 的
+  `forward_tailscale` / `srcnat_wan` 仍覆盖子网路由与 exit node。跑
+  `tmp/psw_toggle_test.sh` 后记得把 `passwall.@global[0].enabled` 改回 1。
+
+---
+
 ## 2026-11-17 关机被 softdog 60s 提前硬复位：改 150s 并修日志落盘（已验证）
 
 - **环境**：158，25.12，`kmod-softdog 6.12.112-r1`，19 个容器
