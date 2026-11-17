@@ -5,3 +5,5 @@
 /caddy_2.11.4_linux_amd64.tar.gz
 # CI 下载的 caddy 二进制(由 diy-part2.sh 拉取,不入 git)
 /files/usr/bin/caddy
+# 本地运维辅助脚本（含路由器凭据，不入 git）
+/tools/

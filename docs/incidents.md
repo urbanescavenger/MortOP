@@ -17,6 +17,33 @@
 
 ---
 
+## 2026-11-17 经 xray-ui 代理访问本地 Jellyfin 超时：Xray freedom 默认黑洞私有 IP（已修复）
+
+- **环境**：xray-ui 26.10.31（`juestnow/xray-ui`，`network_mode: host`，内置 Xray 26.10.31）
+- **现象**：客户端经 x-ui 入站访问 `http://192.168.31.158:8096` 恒定超时
+  （经 socks 实测 `000`/rc=28，约 50s），同期公网
+  `www.gstatic.com/generate_204` 正常 `204`；用户反馈"以前是可以的"
+- **根因**：Xray-core 自 26.4.15 起给 freedom 出站加了默认 finalRule
+  （`defaultBlockPrivateRule`）：凡是从 proxy 入站（vless/vmess 等）进来的目标，
+  命中私有/保留 IP 一律 blackhole，随机保持 30–90s。服务端 error.log：
+  `proxy/freedom: blocked target: tcp:192.168.31.158:8096, blackholing connection for 52s`。
+  路由里的 `192.168.31.0/24 → direct` 规则**救不了**——黑洞发生在 freedom 出站内部
+- **修复**：面板 DB `settings.xrayTemplateConfig` 的 freedom 出站加
+  `"settings": {"finalRules": [{"action": "allow", "ip": ["geoip:private"]}]}`
+  （面板 UI → 设置 → Xray 配置模板也可改同一处）；停容器改库、删残留
+  `-wal/-shm`、启动，新配置已生成进 `/app/bin/config.json`
+- **验证**：本机 Xray 客户端经 27469 入站 + socks 访问 Jellyfin：修复前 `000`
+  （rc=28），修复后 `302`，跟随跳转 `200`（`/web/`，0.03s）；服务端不再出现
+  blocked target
+- **备份**：`/opt/docker/config/xray-ui/etc/xray-ui.db.bak-20261117-140849`
+- **备注**：`geoip:private` 覆盖 RFC1918/loopback/ULA；Tailscale 的
+  `100.64.0.0/10` 不在其中，若需经代理访问 TS 地址要再显式加该网段。
+  上游 3x-ui 同款修复：[commit d7f47d8](https://github.com/MHSanaei/3x-ui/commit/d7f47d8b)；
+  案例 [Discussion #6157](https://github.com/XTLS/Xray-core/discussions/6157)、
+  [freedom 文档](https://xtls.github.io/en/config/outbounds/freedom.html)
+
+---
+
 ## 2026-11-17 收起 14573 直连 + Caddy 访问日志落盘
 
 - **14573（xray-ui 面板）**：从 `Open XUI` 的 WAN 规则移除，只保留
@@ -51,6 +78,33 @@
 - **固件**：`files/etc/uci-defaults/98-docker-forward.sh`（已存在同名规则则跳过）
 - **备注**：规则只生成 tcp/udp；如需容器 ICMP，可加 `proto 'all'`
 - **备注**：规则只生成 tcp/udp；如需容器 ICMP，可加 `proto 'all'`
+
+---
+
+## 2026-11-17 LAN 客户端访问 docker 发布端口全 refused：缺 tailscale→docker 转发（已修复）
+
+- **现象**：LAN/TS 客户端访问 `192.168.31.158` 的 DNAT 发布端口
+  （8096 Jellyfin / 8123 HA / 11434 / 6653 / 1883）一律 Connection refused
+  （恒定 ~2s）；直听端口（SSH:22、caddy:8443）和 `100.108.85.101` 直访均正常
+- **误导**：时间上与 passwall 开关重合，一度怀疑 passwall；A/B 实测
+  （passwall 开/关两种状态同样失败）排除
+- **排查**：iptables DNAT 计数器在涨、fw4 forward_lan `Allow-LAN-to-Docker`
+  accept 计数正常，但 conntrack 无客户端条目 → 源不是 br-lan。PC 上发现
+  `192.168.31.0/24 via 100.100.100.100 metric 5`（Tailscale 子网路由）：
+  流量被劫进隧道，从 `tailscale0` 进来（netstat 里可见
+  `:22 ← 100.93.112.84` 的 SSH 连接）
+- **根因**：11-17 早些的防火墙审计补了 `tailscale→wan`、`tailscale→lan`，
+  漏了 `tailscale→docker`；forward 链 policy drop 下落到
+  `handle_reject → tcp reset`
+- **修复**：`uci add firewall forwarding`（src=tailscale，dest=docker）+ reload；
+  `forward_tailscale` 链新增 `jump accept_to_docker`（oif 10 个 br-*），计数器走包
+- **社区依据**：转发是单向的，zone/forwarding 需逐方向配
+  （[tailscale.tw OpenWrt 指南](https://tailscale.tw/platforms/openwrt/index.md)、
+  [iStoreOS #2574](https://github.com/istoreos/istoreos/issues/2574)）；
+  Tailscale 对"客户端直连该网段仍接受子网路由导致 hairpin"是无官方开关的已知行为
+  （[官方 FAQ](https://tailscale.com/docs/reference/troubleshooting/network-configuration/lan-traffic-overlapping-subnets)）
+- **遗留**：PC/TS 客户端侧的子网路由 hairpin 隐患仍在（accept-routes 关闭可根治）；
+  本条规则建议固件化（`99-*-tailscale-docker.sh`）；passwall 当前停在关闭态
 
 ---
 
