@@ -17,6 +17,25 @@
 
 ---
 
+## 2026-11-17 muse-spark-open 451：容器 ollama 账号地区限制
+
+- **现象**：158 容器 ollama 调 `muse-spark-open:cloud` → 451
+  `not available in your region`；`glm-5.2` / `glm-5.3-flash` → 200
+- **对比**：Windows 本机 ollama（直连出口同样是 `45.143.235.110` / Tokyo，JP）调
+  `muse-spark-open` → **200**
+- **出口验证**：从容器网络实测 egress = `45.143.235.110`（Tokyo/JP），
+  与 Windows ollama 的直连出口完全相同，说明容器**确实走了代理**（不是没代理）
+- **根因**：容器 ollama 的账号 key `/root/.ollama/id_ed25519`
+  （sha256 `e5c9c8…`）与 Windows 的（`C01D03…`）不同。451 是 ollama.com 按
+  **账号地区/权限** 拦截，不是 IP 或容器网络问题
+- **修复（待确认）**：把 Windows 的 `id_ed25519` / `id_ed25519.pub` 同步到
+  容器的 bind mount `/opt/docker/config/ollama` 后重启容器，或在容器里
+  `ollama signin` 登录同一账号；也可以直接用 Windows 的 ollama 跑该模型
+- **备注**：容器的 bind mount 是 `/opt/docker/config/ollama:/root/.ollama`；
+  同步 key 属于敏感操作，操作前备份
+
+---
+
 ## 2026-11-17 Ollama 代理路径 + Tailscale 重启持久性
 
 - **环境**：158 passwall，ollama 容器 `172.24.0.6:11434`；另有一台
