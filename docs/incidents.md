@@ -17,6 +17,22 @@
 
 ---
 
+## 2026-11-17 收起 14573 直连 + Caddy 访问日志落盘
+
+- **14573（xray-ui 面板）**：从 `Open XUI` 的 WAN 规则移除，只保留
+  `27469 27180 29416`；oracle 实测 `14573 closed`，而
+  `https://xui.19961226.xyz:57126/` 仍 **200**（Caddy 反代正常）
+- **Caddy 日志**：全局 `log` 块把默认日志重定向到
+  `/opt/docker/config/caddy/log/access.log`（`roll_size 100MiB`、`roll_keep 5`、
+  `roll_keep_for 720h`）；per-site 的 webdav 日志仍写各自文件
+- **验证**：`caddy validate` 通过；logread 里 `http.log.access` 不再增长
+  （访问日志写入文件），文件中能看到真实请求
+- **备份**：`/etc/caddy/Caddyfile.bak-20261117`
+- **备注**：全局 log 会把 Caddy 的运行日志也写到该文件；启动错误仍会经 procd
+  进 logread
+
+---
+
 ## 2026-11-17 Docker 新网络无法入区：源网段放行（已采用）
 
 - **风险**：Docker 新建网络会生成新的 `br-<id>`，不会自动加入
