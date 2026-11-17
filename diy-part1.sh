@@ -10,14 +10,6 @@
 # Official feeds + kenzok8 feeds are configured in feeds.conf.default.
 ./scripts/feeds update -a
 
-# kenzok8's design theme uses PKG_VERSION 5.8.0-20240106. Official 25.12 builds
-# apk packages, and apk's version parser rejects the inner hyphen
-# ("package version is invalid"). Switch it to Alpine's ~ separator.
-if [ -f feeds/kenzo/luci-theme-design/Makefile ]; then
-    sed -i 's/^PKG_VERSION:=5\.8\.0-20240106$/PKG_VERSION:=5.8.0~20240106/' \
-        feeds/kenzo/luci-theme-design/Makefile
-fi
-
 # tuic-client's prebuilt binary links libstdc++.so.6 but the feed omits
 # +libstdcpp. Declaring it both fixes the -j3 ordering race (provides file may
 # not exist yet) and the runtime dependency in the generated package.
