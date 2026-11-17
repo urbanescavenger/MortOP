@@ -17,6 +17,35 @@
 
 ---
 
+## 2026-11-17 双 AGH 海外实例无法走代理：容器改 host 网络 + DoH 用 IPv4 字面量（已修复）
+
+- **环境**：双 AdGuardHome —— 宿主 AGH（`5553`，国内上游 `223.5.5.5`/`119.29.29.29`，
+  `direct_dns_tcp`）+ Docker AGH（`6653`，海外上游 DoH cloudflare/google，
+  `remote_dns`）；`dns_redirect='1'`
+- **现象**：passwall 启动后 Google 域名解析超时（`nslookup www.google.com 127.0.0.1`
+  timeout，百度正常），passwall 自测失败；但节点/隧道正常（`socks5h` 经
+  `127.0.0.1:1070` → Google `204`，`url_test_node` → `204`）
+- **根因**：海外 AGH 在 Docker 网桥里，出站不进 passwall 的“路由器本机代理”，
+  它的 DoH 是直连 → 被墙。AGH 日志 `failed to init http client: timeout exceeded`；
+  passwall xray 日志 `failed to lookup ... at server TCP//127.0.0.1:6653 >
+  record not found`。另外 bootstrap `223.5.5.5` 对 `dns.google` /
+  `dns.cloudflare.com` 只返回 IPv6（`2001:4860:4860::8844`、
+  `2803:f800:53::8`），容器直连 IPv6 同样不通
+- **修复**：`/etc/docker-stacks/adguard/docker-compose.yml` 加
+  `network_mode: host`、删 `ports:`；海外 AGH 上游改成 IPv4 字面量
+  `https://1.1.1.1/dns-query` + `https://8.8.8.8/dns-query`，`fallback_dns` 清空
+- **验证**：`nslookup www.google.com 127.0.0.1` → `142.251.x`；路由器本机
+  `curl https://www.google.com/generate_204` → `204`（0.44s）；passwall
+  `test_url` → `200`、`url_test_node` → `204`；AGH 启动后无 error/timeout
+- **备份**：`docker-compose.yml.bak-20261117-144024`、
+  `AdGuardHome.yaml.bak-20261117-144024`
+- **备注**：host 模式只占 `3000/tcp` 与 `6653/tcp+udp`（原本就是它自己的
+  docker-proxy 占着），与 uhttpd `80/443`、dnsmasq `53`、宿主 AGH `5553`、
+  avahi/umdns `5353` 均不冲突；社区双 AGH 教程同样用 `--net=host`。
+  AGH 原生不支持给 DNS 上游配代理（`http_proxy` 只管过滤规则下载）
+
+---
+
 ## 2026-11-17 经 xray-ui 代理访问本地 Jellyfin 超时：Xray freedom 默认黑洞私有 IP（已修复）
 
 - **环境**：xray-ui 26.10.31（`juestnow/xray-ui`，`network_mode: host`，内置 Xray 26.10.31）
