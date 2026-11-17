@@ -17,6 +17,63 @@
 
 ---
 
+## 2026-11-17 LuCI 切到 design 主题后整页 500：主题与当前 LuCI 不兼容（已修复）
+
+- **环境**：158，x86_64 ext4 镜像；LuCI 25.12；`luci-theme-design 5.8.0~20240106`
+- **现象**：在 LuCI“主题”列表切到 design 后，任意页面报
+  `dispatcher.lua:68: attempt to index global '__entries' (a nil value)` /
+  `Failed to execute template 'themes/design/header'`，LuCI 不可用
+- **根因**：design 是 2023 年的第三方主题，`header.htm` 仍按旧 LuCI 的全局
+  `entries` 逻辑渲染，而当前 dispatcher 的上下文已改为 `__entries`（仅在分发
+  期间赋值），主题在登录页阶段就触发 nil 索引
+- **为什么固件里会有**：`.config` 里虽然写着
+  `# CONFIG_PACKAGE_luci-theme-design is not set`，但同文件仍选了
+  `CONFIG_PACKAGE_luci-app-design-config=y`；该包的依赖是
+  `luci-theme-design`（`D: libc luci-compat luci-lua-runtime luci-theme-design`），
+  镜像构建时会把主题一起拉进来。与“还原配置”无关，是主题列表里能选到它
+- **修复**：
+  - 设备：`uci set luci.main.mediaurlbase='/luci-static/argon'`，清
+    `/tmp/luci-*cache*`，重启 uhttpd；已验证 LuCI 正常渲染
+  - 构建：`.config` 关掉 `luci-app-design-config` 与
+    `luci-i18n-design-config-zh-cn`，让 design 主题不再被依赖拉入；
+    默认主题仍是 Argon（`99-set-argon-theme.sh`）
+- **验证**：切回 argon 后 `curl http://127.0.0.1/cgi-bin/luci/` 返回正常 LuCI
+  页面（不再出现 Unhandled exception）
+- **备注**：当前设备镜像里仍装着 design 包（老镜像自带），选中它仍会崩；
+  下次刷入新固件后不再存在。需要的话可 `apk del luci-app-design-config
+  luci-i18n-design-config-zh-cn luci-theme-design` 立即移除
+
+---
+
+## 2026-11-17 LuCI Netdata 仪表盘“连接已重置”：netdata ACL 不含 Tailscale 网段（已修复）
+
+- **环境**：158（hostname 仍为 `MortOP-160`），netdata 1.33.1，Tailscale 1.104.1；
+  PC 在 LAN 上但到 `192.168.31.0/24` 的流量被 Tailscale 子网路由接管（源地址 `100.93.112.84`）
+- **现象**：LuCI `系统 → Netdata` 页面本身正常，内嵌仪表盘区域空白，
+  显示 `连接已重置。`；直接从 PC 访问 `http://192.168.31.158:19999/` 同样失败
+- **根因**：该 LuCI 插件只是把
+  `http://<window.location.hostname>:19999` 塞进 iframe，没有问题；
+  失败的是 netdata 自身。OpenWrt 的 `/etc/netdata/netdata.conf` 只允许
+  `localhost` + RFC1918，Tailscale 客户端源地址是 `100.64.0.0/10`；
+  netdata 在 `accept()` 层就关闭不匹配的连接（官方文档原话：
+  “connected and disconnected immediately, without reading even a single byte”），
+  浏览器因此显示连接被重置，而不是 403
+- **修复**：在设备上给 `[web]` 的 `allow connections from` 和
+  `allow dashboard from` 追加 `100.* fd*`，重启 netdata。
+  `/etc/netdata/` 已在 netdata 包的 `/lib/upgrade/keep.d/netdata` 保留清单里，
+  改动会随“保留配置”升级和备份/还原自动带回来，所以**不写 uci-defaults 出厂脚本**
+  （缺这条只影响 Tailscale 访问，出厂 LAN 状态本身正常，不属于“不补会破坏出厂运行”的例外）
+- **验证**：路由器本机 `127.0.0.1:19999` / `192.168.31.158:19999` / `100.108.85.101:19999`
+  全部 200；PC（经 Tailscale，源 `100.x`）与独立节点 oracle 访问均为 200；
+  修复前两者均为 `Connection was reset`，而 LuCI 80 端口一直正常
+- **提交/文件**：无仓库改动；设备端 `/etc/netdata/netdata.conf`，
+  原文件备份 `/etc/netdata/netdata.conf.bak.<时间戳>`
+- **备注**：插件把 iframe 写死为 `http://…:19999`。若 LuCI 用 HTTPS 打开，
+  即使 ACL 放行，Chrome 也会按混合内容拦截；此现象不是本次的连接重置。
+  备份必须是修复之后做的，旧备份会带回旧 ACL
+
+---
+
 ## 2026-11-17 双 AGH 海外实例无法走代理：容器改 host 网络 + DoH 用 IPv4 字面量（已修复）
 
 - **环境**：双 AdGuardHome —— 宿主 AGH（`5553`，国内上游 `223.5.5.5`/`119.29.29.29`，
