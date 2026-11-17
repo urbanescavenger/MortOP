@@ -18,6 +18,18 @@ if [ -f feeds/small/tuic-client/Makefile ]; then
         feeds/small/tuic-client/Makefile
 fi
 
+# 25.12's tailscale package omits ts_omit_clientupdate but not
+# ts_omit_flashappliance. flash-appliance still links clientupdate, so the
+# saved AutoUpdate.Check/Apply prefs make every `tailscale up`/`set` fail with
+# "Auto-update support is disabled in this build" — including
+# --netfilter-mode=off. master already carries the extra tag; backport it.
+# openwrt/packages#30886, tailscale/tailscale#21912.
+if [ -f feeds/packages/net/tailscale/Makefile ] && \
+   ! grep -q 'ts_omit_flashappliance' feeds/packages/net/tailscale/Makefile; then
+    sed -i 's/ts_omit_clientupdate,/ts_omit_clientupdate,ts_omit_flashappliance,/' \
+        feeds/packages/net/tailscale/Makefile
+fi
+
 # Prune kenzok8 duplicates of packages official 25.12 already ships. Must run
 # between update and install: feeds install links whatever is present, and a
 # duplicate name makes it ambiguous which one ends up in the image.
