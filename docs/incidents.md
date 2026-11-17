@@ -17,6 +17,44 @@
 
 ---
 
+## 2026-11-17 关机被 softdog 60s 提前硬复位：改 150s 并修日志落盘（已验证）
+
+- **环境**：158，25.12，`kmod-softdog 6.12.112-r1`，19 个容器
+- **现象**：普通 `reboot` 能回来，但新内核日志出现
+  `EXT4-fs (nvme0n1p2): INFO: recovery required` / `recovery complete`，
+  rootfs 不是干净关机；从发出 reboot 到新内核约 88s
+- **根因**：kmod-softdog 由 `/etc/modules.d/50-softdog` 在开机以默认
+  `soft_margin=60` 加载。reboot-fix 关机时再 `modprobe softdog soft_margin=90`
+  对已加载模块无效；softdog 在 60s 触发 `emergency_restart()`
+  （绕过 `device_shutdown`），而自然关机需要约 70s，rootfs 被提前硬复位
+- **修复**：
+  - 新增 `files/etc/modules.d/50-softdog`：`softdog soft_margin=150 soft_noboot=0 soft_panic=0`
+  - `reboot-fix` 不再假装 modprobe，只持有 `/dev/watchdog0` 不喂；
+    `SOFTDOG_MARGIN` 改 150，注释同步
+  - 卸载 `/opt/docker` 后的 `umount done` / `DONE` 改写到 `/root/reboot-fix.last`
+    （原来写在被卸载的挂载点，数据分区日志缺最后两行）
+- **验证**：重启后 dmesg `soft_margin=150`；`recovery required` 消失；
+  `/root/reboot-fix.last` 有 `umount done` + `DONE`；
+  新内核 btime 距 reboot 约 71s（自然关机，softdog 未触发）；
+  19 容器、Caddy/AGH/netdata/DNS 正常
+- **备注**：SSH 经 Tailscale 回到约 147.5s，是 Tailscale 启动延迟，不是关机耗时
+
+---
+
+## 2026-11-17 host nginx 与 uhttpd 抢 80/443 崩溃循环：禁用并停止打包
+
+- **现象**：每次开机 procd 报 `nginx::instance1 in a crash loop`，
+  `bind() to 0.0.0.0:80/443 failed (98: Address in use)`；host nginx 实际不监听
+- **根因**：`nginx-ssl` 包 enabled，但 80/443 由 uhttpd 占用。
+  真正在用的 nginx 在 `iptv-api` 容器里（host 网络，监听 18080/1935），
+  Caddy 的 `cf.` `/iptv/*` 反代到它，与 host nginx 无关
+- **修复**：158 上 `/etc/init.d/nginx disable`（S80nginx 已删）；
+  `.config` 移除 `CONFIG_PACKAGE_nginx-ssl=y`，注释改为说明 host nginx 不再打包
+- **验证**：重启后无 nginx crash loop、无 `/etc/rc.d/S80nginx`；
+  `iptv-api` 容器 nginx 仍监听 18080/1935；Caddy `op.` 站点 200
+
+---
+
 ## 2026-11-17 LuCI 切到 design 主题后整页 500：主题与当前 LuCI 不兼容（已修复）
 
 - **环境**：158，x86_64 ext4 镜像；LuCI 25.12；`luci-theme-design 5.8.0~20240106`

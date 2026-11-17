@@ -33,8 +33,11 @@ START=99
 STOP=01
 
 SAFETY_NET_SECS=${SAFETY_NET_SECS:-60}
-SOFTDOG_MARGIN=${SOFTDOG_MARGIN:-90}
+SOFTDOG_MARGIN=${SOFTDOG_MARGIN:-150}
 LOGFILE=/opt/docker/reboot-fix.log
+# After /opt/docker is unmounted, $LOGFILE resolves to the rootfs mountpoint,
+# so the final phases go to this separate rootfs file instead.
+ROOTLOG=/root/reboot-fix.last
 
 log() { logger -t reboot-fix "$*"; }
 
@@ -42,6 +45,13 @@ log() { logger -t reboot-fix "$*"; }
 dlog() {
 	logger -t reboot-fix "$*"
 	[ -d /opt/docker ] && printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" >> "$LOGFILE" 2>/dev/null
+}
+
+# Same, but on the rootfs. Used after /opt/docker is unmounted so the final
+# lines are readable at /root/reboot-fix.last after the reboot.
+dlog_root() {
+	logger -t reboot-fix "$*"
+	printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" >> "$ROOTLOG" 2>/dev/null
 }
 
 boot() { :; }
@@ -69,6 +79,7 @@ stop() {
 		sz=$(wc -c < "$LOGFILE" 2>/dev/null)
 		[ -n "$sz" ] && [ "$sz" -gt 262144 ] && mv "$LOGFILE" "$LOGFILE.old" 2>/dev/null
 	fi
+	: > "$ROOTLOG" 2>/dev/null
 
 	dlog "=== reboot-fix stop START ==="
 	dlog "snapshot: containers=$(cnt_containers) shims=$(cnt_shims) overlays=$(cnt_overlays) uptime=$(cut -d. -f1 /proc/uptime)s"
@@ -78,16 +89,16 @@ stop() {
 	( sleep "$SAFETY_NET_SECS"; dlog "SAFETY NET FIRED after ${SAFETY_NET_SECS}s"; force_reboot ) &
 	dlog "safety net armed timeout=${SAFETY_NET_SECS}s"
 
-	# softdog kernel watchdog: no-op if kmod-softdog absent (modprobe fails,
-	# /dev/watchdog0 won't appear). If present, hold /dev/watchdog0 open
-	# without pinging and do NOT magic-close it, so the kernel force-resets at
-	# SOFTDOG_MARGIN seconds even if this subshell is later killed — covering
-	# a post-stop kernel-reboot hang that the userspace timer can't reach.
-	# SOFTDOG_MARGIN > observed healthy reboot time (~49s) to avoid false fire.
-	modprobe softdog soft_margin="$SOFTDOG_MARGIN" 2>/dev/null
+	# softdog is loaded at boot by /etc/modules.d/50-softdog with
+	# soft_margin=150. modprobe cannot change an already-loaded module, so do
+	# not pretend to re-arm it here: just hold /dev/watchdog0 open without
+	# pinging and do NOT magic-close it. The kernel escalates to
+	# emergency_restart() after soft_margin seconds (bypasses device_shutdown),
+	# covering a post-stop kernel-reboot hang that the userspace timer can't
+	# reach. 150s > measured natural shutdown (~70-90s on 158) to avoid false fire.
 	if [ -e /dev/watchdog0 ]; then
 		( exec 3<>/dev/watchdog0; sleep 600 ) &
-		dlog "softdog armed margin=${SOFTDOG_MARGIN}s (kernel-level backstop)"
+		dlog "softdog held (margin from modules.d, expected ${SOFTDOG_MARGIN}s)"
 	fi
 
 	# 1) Docker: stop containers, kill daemons. Do NOT umount yet —
@@ -149,15 +160,15 @@ stop() {
 			umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
 		done
 	done
-	dlog "umount done: overlays=$(cnt_overlays)"
+	dlog_root "umount done: overlays=$(cnt_overlays)"
 
 	# NOTE: do NOT disarm softdog here. Leaving it armed is intentional: it
 	# covers a hang in the post-stop kernel-reboot phase (where the historical
-	# hang was). The kernel reset on a healthy reboot clears softdog, and
-	# SOFTDOG_MARGIN is set above the healthy reboot time so it never fires
-	# on a clean shutdown.
+	# hang was). The kernel reset on a healthy reboot clears softdog, and the
+	# 150s margin in modules.d is above the measured natural shutdown (~70-90s),
+	# so it does not fire on a clean shutdown.
 
 	sync; sync
-	dlog "=== reboot-fix stop DONE ==="
+	dlog_root "=== reboot-fix stop DONE ==="
 	return 0
 }
