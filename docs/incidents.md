@@ -17,6 +17,30 @@
 
 ---
 
+## 2026-11-17 Ollama 代理路径 + Tailscale 重启持久性
+
+- **环境**：158 passwall，ollama 容器 `172.24.0.6:11434`；另有一台
+  `192.168.31.174` 也跑 ollama（0.40.16）
+- **分流现状**：`passwall.OLLAMA` 的 `domain:ollama.com` 现在映射到
+  `outboundTag "OLLAMA"` → `socks 127.0.0.1:1085` → 节点 `lSNYZ1Qp`（ollama 节点）。
+  **容器出站到 ollama.com 已经走这个代理**
+- **验证**：
+  - 容器 `glm-5.2:cloud` → **200**（1.3s）
+  - 容器 `glm-5.3-flash:cloud` → **200**（1.4s）
+  - 容器 `muse-spark-open:cloud` → **451**（节点所在地区不支持该模型，不是链路问题）
+  - `.174` 的 ollama 通过 158 转发，域名规则同样匹配 OLLAMA → 也走代理
+- **入站**：158 容器的 11434 已加入 passwall `tcp_no_redir_ports` /
+  `udp_no_redir_ports`，否则默认 TCP 重定向会抢在 Docker DNAT 之前把它送进代理
+- **Tailscale 重启持久性**：`--netfilter-mode=off` 在当前 tailscaled 构建里不存在
+  （`flag provided but not defined`），且 `fw_mode=off` 也挡不住它设置
+  `src_valid_mark=1`。已在 `/etc/init.d/tailscale` 的 `start_service` 末尾加后台循环
+  （8×2s）反复置 0；固件 uci-defaults 同步 patch。Tailscale 重启后 IPv4/IPv6、
+  .174、158 容器均恢复正常
+- **备注**：OLLAMA 分流是按域名全局生效的；若以后要让 .174 直连、只让容器走代理，
+  需要按源 IP/MAC 做 ACL，当前没有这样做
+
+---
+
 ## 2026-11-17 防火墙审计：Tailscale 转发缺失 + 残留规则
 
 - **环境**：158，fw4/nftables
