@@ -17,22 +17,19 @@
 
 ---
 
-## 2026-11-17 muse-spark-open 451：容器 ollama 账号地区限制
+## 2026-11-17 muse-spark-open 451：容器内模型未安装（已解决）
 
 - **现象**：158 容器 ollama 调 `muse-spark-open:cloud` → 451
   `not available in your region`；`glm-5.2` / `glm-5.3-flash` → 200
-- **对比**：Windows 本机 ollama（直连出口同样是 `45.143.235.110` / Tokyo，JP）调
-  `muse-spark-open` → **200**
-- **出口验证**：从容器网络实测 egress = `45.143.235.110`（Tokyo/JP），
-  与 Windows ollama 的直连出口完全相同，说明容器**确实走了代理**（不是没代理）
-- **根因**：容器 ollama 的账号 key `/root/.ollama/id_ed25519`
-  （sha256 `e5c9c8…`）与 Windows 的（`C01D03…`）不同。451 是 ollama.com 按
-  **账号地区/权限** 拦截，不是 IP 或容器网络问题
-- **修复（待确认）**：把 Windows 的 `id_ed25519` / `id_ed25519.pub` 同步到
-  容器的 bind mount `/opt/docker/config/ollama` 后重启容器，或在容器里
-  `ollama signin` 登录同一账号；也可以直接用 Windows 的 ollama 跑该模型
-- **备注**：容器的 bind mount 是 `/opt/docker/config/ollama:/root/.ollama`；
-  同步 key 属于敏感操作，操作前备份
+- **误导**：一度怀疑容器账号 key 与 Windows 不同（`e5c9c8…` vs `C01D03…`），
+  以及代理/地区问题；实测容器出口 `45.143.235.110`（Tokyo/JP）与 Windows 相同
+- **真正根因**：容器内**没有安装** `muse-spark-open:cloud`。`:cloud` 模型也需要在
+  对应 ollama 实例里 `ollama pull` 一次；未安装时请求会向主站拉取并返回 451
+- **修复**：在容器里安装/拉取该模型（用户刚装；`POST /api/pull` 返回
+  `{"status":"success"}`），**不需要改 key**
+- **验证**：`muse-spark-open:cloud` generate → **200**，正常返回
+- **备注**：容器账号、出口、passwall OLLAMA 分流都正常；以后先 `ollama list`
+  确认模型是否已安装
 
 ---
 
@@ -46,7 +43,7 @@
 - **验证**：
   - 容器 `glm-5.2:cloud` → **200**（1.3s）
   - 容器 `glm-5.3-flash:cloud` → **200**（1.4s）
-  - 容器 `muse-spark-open:cloud` → **451**（节点所在地区不支持该模型，不是链路问题）
+  - 容器 `muse-spark-open:cloud` → **451**（当时模型未安装；`ollama pull` 后 **200**）
   - `.174` 的 ollama 通过 158 转发，域名规则同样匹配 OLLAMA → 也走代理
 - **入站**：158 容器的 11434 已加入 passwall `tcp_no_redir_ports` /
   `udp_no_redir_ports`，否则默认 TCP 重定向会抢在 Docker DNAT 之前把它送进代理
