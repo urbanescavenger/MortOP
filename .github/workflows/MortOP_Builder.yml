@@ -169,6 +169,10 @@ jobs:
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
         chmod +x $DIY_P2_SH
         cd openwrt
+        # 版本号 = 构建当天日期（用户约定 2026-11-19）：sed 进 .config 后，
+        # DISTRIB_RELEASE 与镜像文件名（mortop-<日期>-x86-64-*）都用它；
+        # 上游基版本仍由 REPO_BRANCH(v25.12.6) 和 VERSION_REPO 保留。
+        sed -i "s/^CONFIG_VERSION_NUMBER=.*/CONFIG_VERSION_NUMBER=\"$(date +%Y.%m.%d)\"/" .config
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
     - name: Download package
